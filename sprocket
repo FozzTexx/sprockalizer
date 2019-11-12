@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+import argparse
+import cv2
+import numpy as np
+import math
+
+def build_argparser():
+  parser = argparse.ArgumentParser()
+  parser.add_argument("file", help="input file")
+  parser.add_argument("--frame", type=int, help="frame number to stop at")
+  return parser
+
+COLORS = ((0x00,0x00,0x00), (0xaa,0x00,0x00), (0x00,0xaa,0x00), (0xaa,0xaa,0x00),
+          (0x00,0x00,0xaa), (0xaa,0x00,0xaa), (0x00,0x55,0xaa), (0xaa,0xaa,0xaa),
+          (0x55,0x55,0x55), (0xff,0x55,0x55), (0x55,0xff,0x55), (0xff,0xff,0x55),
+          (0x55,0x55,0xff), (0xff,0x55,0xff), (0x55,0xff,0xff), (0xff,0xff,0xff))
+CLR_BLACK = COLORS[0]
+CLR_BLUE = COLORS[1]
+CLR_GREEN = COLORS[2]
+CLR_CYAN = COLORS[3]
+CLR_RED = COLORS[4]
+CLR_MAGENTA = COLORS[5]
+CLR_BROWN = COLORS[6]
+CLR_LGRAY = COLORS[7]
+CLR_GRAY = COLORS[8]
+CLR_LBLUE = COLORS[9]
+CLR_LGREEN = COLORS[10]
+CLR_LCYAN = COLORS[11]
+CLR_LRED = COLORS[12]
+CLR_LMAGENTA = COLORS[13]
+CLR_YELLOW = COLORS[14]
+CLR_WHITE = COLORS[15]
+
+def line_angle(line):
+  return math.atan2(line[0][1] - line[1][1], line[0][0] - line[1][0])
+
+def linify(lines, img):
+  vertical = []
+  horizontal = []
+  thickness = 5
+  ANGLE_LIMIT = 10
+
+  if not lines is not None:
+    return None, None
+  
+  for x in range(0, len(lines)):
+    for x1,y1,x2,y2 in lines[x]:
+      line = ((x1, y1), (x2, y2))
+      angle = abs(math.degrees(line_angle(line)))
+      if abs(180 - angle) <= ANGLE_LIMIT:
+        horizontal.append(line)
+      elif abs(90 - angle) <= ANGLE_LIMIT:
+        vertical.append(line)
+  #attrs['vert'] = vertical
+  #attrs['horz'] = horizontal
+
+  # Plot vertical lines
+  for x in range(0, len(vertical)):
+    cv2.line(img, vertical[x][0], vertical[x][1], CLR_LGREEN, thickness)
+
+  # Plot horizontal lines
+  for x in range(0, len(horizontal)):
+    cv2.line(img, horizontal[x][0], horizontal[x][1], CLR_LRED, thickness)
+
+  return horizontal, vertical
+
+# https://medium.com/@mrhwick/simple-lane-detection-with-opencv-bfeb6ae54ec0
+def find_sprocket(size, horizontal, vertical):
+  # FIXME - use a percentage
+  MARGIN = 20
+  RIGHT = 100
+  CMAX = 200
+  center = size[1] / 2
+
+  spr_top = spr_bot = spr_rgt = None
+  
+  # FIXME - find right side of sprocket
+  pts_x = []
+  pts_y = []
+  for line in vertical:
+    if ((line[0][1] > center - CMAX and line[0][1] < center + CMAX) \
+        and (line[1][1] > center - CMAX and line[1][1] < center + CMAX)) \
+       and line[0][0] < RIGHT and line[1][0] < RIGHT \
+       and line[0][0] > 10 and line[1][0] > 10:
+      pts_x.append(line[0][0])
+      pts_x.append(line[1][0])
+      pts_y.append(line[0][1])
+      pts_y.append(line[1][1])
+  if len(pts_x):
+    x_min = np.median(pts_x)
+    edge = np.where(pts_x < x_min + MARGIN)
+    right = int(np.average(np.array(pts_x)[edge]))
+    spr_rgt = ((right, 0), (right, size[1] - 1))
+    RIGHT = right
+
+  pts_x = []
+  pts_y = []
+  for line in horizontal:
+    if line[0][1] < center and line[1][1] < center \
+       and line[0][0] < RIGHT - MARGIN and line[1][0] < RIGHT:
+      pts_x.append(line[0][0])
+      pts_x.append(line[1][0])
+      pts_y.append(line[0][1])
+      pts_y.append(line[1][1])
+  if len(pts_x):
+    y_max = np.max(pts_y)
+    edge = np.where(pts_y > y_max - MARGIN)
+    top = int(np.average(np.array(pts_y)[edge]))
+    spr_top = ((0, top), (size[0] - 1, top))
+
+  pts_x = []
+  pts_y = []
+  for line in horizontal:
+    if line[0][1] > center and line[1][1] > center \
+       and line[0][0] < RIGHT - MARGIN and line[1][0] < RIGHT:
+      pts_x.append(line[0][0])
+      pts_x.append(line[1][0])
+      pts_y.append(line[0][1])
+      pts_y.append(line[1][1])
+  if len(pts_x):
+    y_min = np.min(pts_y)
+    edge = np.where(pts_y < y_min + MARGIN)
+    bot = int(np.average(np.array(pts_y)[edge]))
+    spr_bot = ((0, bot), (size[0] - 1, bot))
+
+    # bot = np.poly1d(np.polyfit(np.array(pts_x)[edge], np.array(pts_y)[edge], deg=1))
+    # bot_l = int(bot(0))
+    # bot_r = int(bot(size[0] - 1))
+    # spr_bot = ((0, bot_l), (size[0] - 1, bot_r))
+    
+  return spr_top, spr_bot, spr_rgt
+  
+def main():
+  args = build_argparser().parse_args()
+
+  movie = cv2.VideoCapture(args.file)
+  cv2.namedWindow("frame", cv2.WINDOW_NORMAL)
+  cv2.namedWindow("black", cv2.WINDOW_NORMAL)
+  cv2.namedWindow("white", cv2.WINDOW_NORMAL)
+  cv2.namedWindow("lines", cv2.WINDOW_NORMAL)
+
+  doStep = True
+  singleStep = True
+  done = False
+  curFrame = 0
+  if args.frame:
+    curFrame = args.frame
+    ret = movie.set(cv2.CAP_PROP_POS_FRAMES, curFrame)
+  
+  while not done:
+    if not singleStep or doStep:
+      doStep = False
+      ret, frame = movie.read()
+      gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+      gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+      black = np.zeros(shape=gray.shape, dtype=np.uint8)
+      sel = np.where(gray >= 230)
+      black[sel] = gray[sel]
+      
+      white = 255 * np.ones(shape=gray.shape, dtype=np.uint8)
+      sel = np.where(gray <= 40)
+      white[sel] = gray[sel]
+
+      blank = np.zeros(shape=frame.shape, dtype=np.uint8)
+      
+      black_c = cv2.Canny(black, 50, 100, apertureSize=3)
+      kernel = np.ones((2,2), np.uint8)
+      black_c = cv2.dilate(black_c, kernel, iterations = 1)
+      lines1 = cv2.HoughLinesP(black_c, 2, np.pi/180, threshold=10,
+                               minLineLength=5, maxLineGap=5)
+      for line in lines1:
+        line = line[0]
+        cv2.line(blank, (line[0], line[1]), (line[2], line[3]), CLR_LBLUE, 3)
+        
+      spr_h, spr_v = linify(lines1, blank)
+
+      white = cv2.Canny(white, 50, 100, apertureSize=3)
+      lines2 = cv2.HoughLinesP(white, 2, np.pi/180, threshold=10,
+                               minLineLength=20, maxLineGap=5)
+      brd_h, brd_v = linify(lines2, blank)
+
+      if not spr_h is None and not spr_v is None:
+        spr_top, spr_bot, spr_rgt = find_sprocket(frame.shape[1::-1], spr_h, spr_v)
+        if not spr_top is None:
+          cv2.line(frame, spr_top[0], spr_top[1], CLR_YELLOW, 5)
+        else:
+          print("NO TOP")
+          singleStep = True
+        if not spr_bot is None:
+          cv2.line(frame, spr_bot[0], spr_bot[1], CLR_YELLOW, 5)
+        else:
+          print("NO BOT")
+          singleStep = True
+        if not spr_rgt is None:
+          cv2.line(frame, spr_rgt[0], spr_rgt[1], CLR_YELLOW, 5)
+        else:
+          print("NO RIGHT")
+          singleStep = True
+      else:
+        print("NO LINES", not spr_h, not spr_v)
+        singleStep = True
+      
+      inframe = frame
+      label = "%i" % (curFrame)
+      cv2.putText(inframe, label, (10, inframe.shape[0] - 40),
+                  cv2.FONT_HERSHEY_SIMPLEX, 5, (0,0,0), 10)
+      cv2.putText(inframe, label, (10, inframe.shape[0] - 40),
+                  cv2.FONT_HERSHEY_SIMPLEX, 5, (255,255,255), 7)
+      
+      cv2.imshow("frame", inframe)
+      cv2.imshow("black", black)
+      cv2.imshow("white", black_c)
+      cv2.imshow("lines", blank)
+
+      curFrame += 1
+      if args.frame is not None and curFrame == args.frame + 1:
+        singleStep = True
+        doStep = False
+      
+    key = cv2.waitKey(1)
+    if key == 27:
+      done = True
+      break
+    elif key == 13:
+      singleStep = True
+      doStep = True
+    elif key == 32:
+      singleStep = not singleStep
+    elif key == ord('b'):
+      singleStep = True
+      frame_num = movie.get(cv2.CAP_PROP_POS_FRAMES)
+      if frame_num > 1:
+        curFrame -= 2
+        ret = movie.set(cv2.CAP_PROP_POS_FRAMES, frame_num - 2)
+        doStep = True
+
+  cv2.destroyAllWindows()
+    
+  return
+
+if __name__ == '__main__':
+  exit(main() or 0)
