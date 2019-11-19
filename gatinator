@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+#
+# I am the gate finder, are you the sprocket master?
+
+import argparse
+import cv2
+from sprocket import Sprocket
+from line import NN
+from gate import Gate
+import numpy as np
+from scipy import stats
+
+def build_argparser():
+  parser = argparse.ArgumentParser()
+  parser.add_argument("file", help="input file")
+  parser.add_argument("--frame", type=int, help="frame number to stop at")
+  return parser
+
+COLORS = ((0x00,0x00,0x00), (0xaa,0x00,0x00), (0x00,0xaa,0x00), (0xaa,0xaa,0x00),
+          (0x00,0x00,0xaa), (0xaa,0x00,0xaa), (0x00,0x55,0xaa), (0xaa,0xaa,0xaa),
+          (0x55,0x55,0x55), (0xff,0x55,0x55), (0x55,0xff,0x55), (0xff,0xff,0x55),
+          (0x55,0x55,0xff), (0xff,0x55,0xff), (0x55,0xff,0xff), (0xff,0xff,0xff))
+CLR_BLACK = COLORS[0]
+CLR_BLUE = COLORS[1]
+CLR_GREEN = COLORS[2]
+CLR_CYAN = COLORS[3]
+CLR_RED = COLORS[4]
+CLR_MAGENTA = COLORS[5]
+CLR_BROWN = COLORS[6]
+CLR_LGRAY = COLORS[7]
+CLR_GRAY = COLORS[8]
+CLR_LBLUE = COLORS[9]
+CLR_LGREEN = COLORS[10]
+CLR_LCYAN = COLORS[11]
+CLR_LRED = COLORS[12]
+CLR_LMAGENTA = COLORS[13]
+CLR_YELLOW = COLORS[14]
+CLR_WHITE = COLORS[15]
+
+# FIXME - Make bounds/rect class, sprocket class, filmgate class
+
+def draw_lines(img, lines, color, thickness):
+  for l in lines:
+    cv2.line(img, l[0], l[1], color, thickness)
+  return
+    
+def main():
+  args = build_argparser().parse_args()
+
+  movie = cv2.VideoCapture(args.file)
+  cv2.namedWindow("1", cv2.WINDOW_NORMAL)
+  cv2.namedWindow("2", cv2.WINDOW_NORMAL)
+  cv2.namedWindow("3", cv2.WINDOW_NORMAL)
+  cv2.namedWindow("4", cv2.WINDOW_NORMAL)
+
+  sprockets = []
+  spr_size = 0
+  doStep = True
+  singleStep = True
+  done = False
+  curFrame = 0
+  frameSize = None
+  fr = None
+  if args.frame:
+    curFrame = args.frame
+    ret = movie.set(cv2.CAP_PROP_POS_FRAMES, curFrame)
+  
+  while not done:
+    if doStep or not singleStep:
+      doStep = False
+      ret, frame = movie.read()
+      if not ret:
+        singleStep = True
+        doStep = False
+      else:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        lcheck = np.zeros(shape=frame.shape, dtype=np.uint8)
+
+        sprocket = Sprocket(gray)
+        gate = Gate(sprocket, gray, None, spr_size)
+        
+        fr_center = int(gray.shape[0] / 2)
+        gate_black = stats.mode(gray[:, -1])[0][0]
+
+        if sprocket.found:
+          cv2.rectangle(lcheck, *sprocket.bounds.cv, CLR_LBLUE, 3)
+        if sprocket.top:
+          cv2.line(lcheck, (0, sprocket.top), (frame.shape[1], sprocket.top), CLR_YELLOW, 5)
+        if sprocket.bottom:
+          cv2.line(lcheck, (0, sprocket.bottom), (frame.shape[1], sprocket.bottom),
+                   CLR_YELLOW, 5)
+        if sprocket.right:
+          cv2.line(lcheck, (sprocket.right, 0), (sprocket.right, frame.shape[0]),
+                   CLR_YELLOW, 5)
+ 
+        if not sprocket.found:
+          print("NO SPROCKET FOUND", curFrame)
+          #singleStep = True
+        else:
+          sprockets.append(sprocket.stats)
+          spr_size = stats.mode(np.array(sprockets)[:, 3])[0][0]
+
+        before = frame
+        cropped = None
+        if gate.found:
+          if not NN(frameSize) or len(sprockets) < 20:
+            frameSize = (gate.bounds.width - 20, gate.bounds.height - 20)
+          size = frame.shape[1::-1]
+
+          crop = (int(size[0] / 2 - frameSize[0] / 2) + 55,
+                  int(size[1] / 2 - frameSize[1] / 2))
+          before = frame[crop[1]:crop[1] + frameSize[1], crop[0]:crop[0] + frameSize[0]].copy()
+          
+          rect = [gate.bounds.x1 + 10, int(gate.bounds.height / 2 - frameSize[1] / 2)]
+          if rect[0] < 0:
+            rect[0] = 0
+          if rect[1] < 0:
+            rect[1] = 0  
+          
+          print("CROPPING", rect, gate.bounds, frameSize)
+          cropped = frame[rect[1]:rect[1] + frameSize[1],
+                          rect[0]:rect[0] + frameSize[0]].copy()
+          # frame = cv2.resize(frame, size)
+
+          cv2.rectangle(frame, *gate.bounds.cv, CLR_WHITE, 4)
+          cv2.rectangle(lcheck, *gate.bounds.cv, CLR_WHITE, 4)
+        else:
+          print("NO FRAME FOUND")
+          #singleStep = True
+          # if NN(frame_guess):
+          #   if NN(fr):
+          #     center = int((frame_guess[1][1] + frame_guess[0][1]) / 2)
+          #     width = fr[1][0] - fr[0][0]
+          #     height = fr[1][1] - fr[0][1]
+          #     top = int(center - height / 2)
+          #     print("CENTER", center, width, height, top)
+          #     fr = ((frame_guess[0][0], top), (frame_guess[0][0] + width, top + height))
+          #     print("FRAME", fr)
+          #   else:
+          #     fr = frame_guess
+            
+        inframe = frame
+        label = "%i" % (curFrame)
+        cv2.putText(inframe, label, (10, inframe.shape[0] - 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 5, (0,0,0), 10)
+        cv2.putText(inframe, label, (10, inframe.shape[0] - 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 5, (255,255,255), 7)
+
+        cv2.imshow("1", inframe)
+        cv2.imshow("2", lcheck)
+        #cv2.imshow("3", gate_c)
+        if NN(cropped):
+          cv2.imshow("4", cropped)
+
+        curFrame += 1
+        if NN(args.frame) and curFrame == args.frame + 1:
+          singleStep = True
+          doStep = False
+      
+    key = cv2.waitKey(1)
+    if key == 27:
+      done = True
+      break
+    elif key == 13:
+      singleStep = True
+      doStep = True
+    elif key == 32:
+      singleStep = not singleStep
+    elif key == ord('b'):
+      singleStep = True
+      frame_num = movie.get(cv2.CAP_PROP_POS_FRAMES)
+      if frame_num > 1:
+        curFrame -= 2
+        ret = movie.set(cv2.CAP_PROP_POS_FRAMES, frame_num - 2)
+        doStep = True
+
+  cv2.destroyAllWindows()
+
+  if len(sprockets):
+    print()
+    sprockets = np.array(sprockets)
+    size = sprockets[:, 4]
+    median = np.median(size)
+    mode = stats.mode(size)
+    print("SPROCKET SIZE", len(sprockets), median, mode)
+    size = sprockets[:, 2]
+    median = np.median(size)
+    mode = stats.mode(size)
+    counts = np.bincount(size)
+    print("SPROCKET RIGHT", len(sprockets), median, mode, counts)
+    
+  return
+
+if __name__ == '__main__':
+  exit(main() or 0)
