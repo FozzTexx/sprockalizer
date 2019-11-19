@@ -69,7 +69,9 @@ def lines_near(lower, upper, lines, xy):
 
 class Gate:
   def __init__(self, sprocket, frame, previous, spr_size):
-    self.b_gate = self.l_gate = self.best = None
+    self.b_gate = self.l_gate = self.best = self.prev_bounds = None
+    if line.NN(previous):
+      self.prev_bounds = previous.bounds
     
     gate_black = stats.mode(frame[:, -1])[0][0]
     gate = 255 * np.ones(shape=frame.shape, dtype=np.uint8)
@@ -134,8 +136,8 @@ class Gate:
       self.l_gate[2] = int(np.median(pts_x))
 
     y = MARGIN
-    if line.NN(previous):
-      y = previous[0][1]
+    if line.NN(self.prev_bounds):
+      y = self.prev_bounds.y1
     elif line.NN(guess):
       y = guess.y1
     if y < MARGIN:
@@ -150,7 +152,7 @@ class Gate:
     else:
       trows = rows[:y + MARGIN]
       mrow = np.argmin(trows)
-      if line.NN(previous) and abs(mrow - previous[0][1]) <= 5:
+      if line.NN(self.prev_bounds) and abs(mrow - self.prev_bounds.y1) <= 5:
         self.b_gate[1] = mrow
       else:
         print("TOP NOT FOUND", np.argmin(trows), np.min(trows), y)
@@ -168,10 +170,10 @@ class Gate:
       top = self.l_gate[1]
     if not right or not top:
       print("ABORT")
-      print(self.b_gate, "\n", self.l_gate, "\n", guess, "\n", previous)
+      print(self.b_gate, "\n", self.l_gate, "\n", guess, "\n", self.prev_bounds.cv)
       return None
-    if line.NN(previous):
-      height = previous[1][1] - previous[0][1]
+    if line.NN(self.prev_bounds):
+      height = self.prev_bounds.height
     elif line.NN(guess):
       height = guess.height
     else:
@@ -234,7 +236,7 @@ class Gate:
       best[missing] = np.array(self.l_gate)[missing]
     if None in best[:4]:
       print("TOO MUCH MISSING")
-      print(best, "\n", self.b_gate, "\n", self.l_gate, "\n", guess, "\n", previous)
+      print(best, "\n", self.b_gate, "\n", self.l_gate, "\n", guess, "\n", self.prev_bounds.cv)
       return None
 
     if line.NN(best[1]) and line.NN(best[2]) \
@@ -262,9 +264,9 @@ class Gate:
       best[3] = best[7]
 
     altw = alth = prvw = prvh = 0
-    if line.NN(previous):
-      prvw = previous[1][0] - previous[0][0]
-      prvh = previous[1][1] - previous[0][1]
+    if line.NN(self.prev_bounds):
+      prvw = self.prev_bounds.width
+      prvh = self.prev_bounds.height
     curw = best[2] - best[0]
     curh = best[3] - best[1]
     aspw = (curh / sp.FRAME_SUPER8[1]) * sp.FRAME_SUPER8[0]
@@ -284,7 +286,7 @@ class Gate:
     print("ASPECT", prvw, prvh, curw, curh, aspw, asph, altw, alth)
 
     print("BOUNDS")
-    print(best, "\n", self.b_gate, "\n", self.l_gate, "\n", guess, "\n", previous)
+    print(best, "\n", self.b_gate, "\n", self.l_gate, "\n", guess, "\n", self.prev_bounds)
     if (not sprocket.found or abs(sprocket.bounds.height - spr_size) > 5) \
        and abs(curw - prvw) > 5 and abs(aspw - prvw) > MARGIN \
        and abs(curw - aspw) > MARGIN:
@@ -293,8 +295,8 @@ class Gate:
     else:
       if line.NN(self.b_gate[2]) and line.NN(self.l_gate[2]) \
          and (abs(self.b_gate[2] - self.l_gate[2]) <= 5 or abs(curw - prvw) <= 5 \
-              or line.NN((self.b_gate[1]) and line.NN(previous) \
-                  and abs(self.b_gate[1] - previous[1]) < 5)) \
+              or line.NN((self.b_gate[1]) and line.NN(self.prev_bounds) \
+                  and abs(self.b_gate[1] - self.prev_bounds.y1) < 5)) \
          and best[1] + asph < frame.shape[0]:
         print("MOVE BOTTOM")
         best[3] = int(best[1] + asph)
@@ -312,6 +314,8 @@ class Gate:
   def bounds(self):
     if self.found:
       return line.Bounds(self.best[:2], ll=self.best[2:4])
+    else:
+      return self.prev_bounds
     return None
       
   @property

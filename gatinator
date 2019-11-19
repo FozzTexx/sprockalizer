@@ -5,7 +5,7 @@
 import argparse
 import cv2
 from sprocket import Sprocket
-from line import NN
+from line import NN, Bounds
 from gate import Gate
 import numpy as np
 from scipy import stats
@@ -60,7 +60,7 @@ def main():
   done = False
   curFrame = 0
   frameSize = None
-  fr = None
+  gate = None
   if args.frame:
     curFrame = args.frame
     ret = movie.set(cv2.CAP_PROP_POS_FRAMES, curFrame)
@@ -79,7 +79,7 @@ def main():
         lcheck = np.zeros(shape=frame.shape, dtype=np.uint8)
 
         sprocket = Sprocket(gray)
-        gate = Gate(sprocket, gray, None, spr_size)
+        gate = Gate(sprocket, gray, gate, spr_size)
         
         fr_center = int(gray.shape[0] / 2)
         gate_black = stats.mode(gray[:, -1])[0][0]
@@ -113,34 +113,23 @@ def main():
                   int(size[1] / 2 - frameSize[1] / 2))
           before = frame[crop[1]:crop[1] + frameSize[1], crop[0]:crop[0] + frameSize[0]].copy()
           
-          rect = [gate.bounds.x1 + 10, int(gate.bounds.height / 2 - frameSize[1] / 2)]
-          if rect[0] < 0:
-            rect[0] = 0
-          if rect[1] < 0:
-            rect[1] = 0  
-          
-          print("CROPPING", rect, gate.bounds, frameSize)
-          cropped = frame[rect[1]:rect[1] + frameSize[1],
-                          rect[0]:rect[0] + frameSize[0]].copy()
-          # frame = cv2.resize(frame, size)
-
-          cv2.rectangle(frame, *gate.bounds.cv, CLR_WHITE, 4)
-          cv2.rectangle(lcheck, *gate.bounds.cv, CLR_WHITE, 4)
+          prev_bounds = gate.bounds
         else:
           print("NO FRAME FOUND")
-          #singleStep = True
-          # if NN(frame_guess):
-          #   if NN(fr):
-          #     center = int((frame_guess[1][1] + frame_guess[0][1]) / 2)
-          #     width = fr[1][0] - fr[0][0]
-          #     height = fr[1][1] - fr[0][1]
-          #     top = int(center - height / 2)
-          #     print("CENTER", center, width, height, top)
-          #     fr = ((frame_guess[0][0], top), (frame_guess[0][0] + width, top + height))
-          #     print("FRAME", fr)
-          #   else:
-          #     fr = frame_guess
-            
+
+        rect = [gate.bounds.x1 + 10,
+                int((gate.bounds.y1 + gate.bounds.y2) / 2 - frameSize[1] / 2)]
+        if rect[0] < 0:
+          rect[0] = 0
+        if rect[1] < 0:
+          rect[1] = 0  
+
+        print("CROPPING", rect, gate.bounds, frameSize)
+        cropped = frame[rect[1]:rect[1] + frameSize[1],
+                        rect[0]:rect[0] + frameSize[0]].copy()
+        cv2.rectangle(frame, *gate.bounds.cv, CLR_WHITE, 4)
+        cv2.rectangle(lcheck, *gate.bounds.cv, CLR_WHITE, 4)
+          
         inframe = frame
         label = "%i" % (curFrame)
         cv2.putText(inframe, label, (10, inframe.shape[0] - 40),
@@ -178,18 +167,18 @@ def main():
 
   cv2.destroyAllWindows()
 
-  if len(sprockets):
-    print()
-    sprockets = np.array(sprockets)
-    size = sprockets[:, 4]
-    median = np.median(size)
-    mode = stats.mode(size)
-    print("SPROCKET SIZE", len(sprockets), median, mode)
-    size = sprockets[:, 2]
-    median = np.median(size)
-    mode = stats.mode(size)
-    counts = np.bincount(size)
-    print("SPROCKET RIGHT", len(sprockets), median, mode, counts)
+  # if len(sprockets):
+  #   print()
+  #   sprockets = np.array(sprockets)
+  #   size = sprockets[:, 3]
+  #   median = np.median(size)
+  #   mode = stats.mode(size)
+  #   print("SPROCKET SIZE", len(sprockets), median, mode)
+  #   size = sprockets[:, 1]
+  #   median = np.median(size)
+  #   mode = stats.mode(size)
+  #   counts = np.bincount(size)
+  #   print("SPROCKET RIGHT", len(sprockets), median, mode, counts)
     
   return
 

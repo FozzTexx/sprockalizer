@@ -138,7 +138,7 @@ class Bounds:
       elif not ll is None:
         if isarray(ll):
           pt = Point(ll)
-          self.size = Size(pt.x - self.origin.x, pt.y - self.origin.y)
+          self.size = Size(pt.x - self.origin.x + 1, pt.y - self.origin.y + 1)
         else:
           self.size = size
     return
@@ -207,6 +207,10 @@ class Bounds:
     if x1 <= x2 and y1 <= y2:
       return Rectangle(origin=(x1, y1), ll=(x2, y2))
     return None
+
+  def __repr__(self):
+    a = self.cv
+    return "[%s, %s, %s, %s]" % (a[0][0], a[0][1], a[1][0], a[1][1])
 
 def line_angle(line):
   return math.atan2(line[0][1] - line[1][1], line[0][0] - line[1][0])
