@@ -88,15 +88,8 @@ class Sprocket:
   @property
   def bounds(self):
     if self.found:
-      return line.Bounds((0, self.top), ll=(self.right, self.bottom))
+      return line.Bounds((0, self.top), br=(self.right, self.bottom))
     return None
-
-  @property
-  def stats(self):
-    height = None
-    if line.NN(self.top) and line.NN(self.bottom):
-      height = self.bottom - self.top
-    return (self.top, self.right, self.bottom, height)
 
   @property
   def guess(self):
@@ -110,5 +103,13 @@ class Sprocket:
     right = left + int(FRAME_SUPER8[0] * scale)
     bottom = top + int(FRAME_SUPER8[1] * scale)
     if top >= 0 and bottom < self.frameSize.height and right < self.frameSize.width:
-      return line.Bounds((left, top), ll=(right, bottom))
+      return line.Bounds((left, top), br=(right, bottom))
     return None
+
+  @property
+  def stats(self):
+    height = None
+    if line.NN(self.top) and line.NN(self.bottom):
+      height = self.bottom - self.top
+    return [self.top, self.right, self.bottom, height]
+

@@ -26,9 +26,19 @@ class Point:
   def x(self):
     return self.point[0]
 
+  @x.setter
+  def x(self, val):
+    self.point = (val, self.point[1])
+    return
+  
   @property
   def y(self):
     return self.point[1]
+
+  @y.setter
+  def y(self, val):
+    self.point = (self.point[0], val)
+    return
 
   @property
   def cv(self):
@@ -53,9 +63,19 @@ class Size:
   def width(self):
     return self.size[0]
 
+  @width.setter
+  def width(self, val):
+    self.size = (val, self.size[1])
+    return
+  
   @property
   def height(self):
     return self.size[1]
+
+  @height.setter
+  def height(self, val):
+    self.size = (self.size[0], val)
+    return
 
 class Line:
   def __init__(self, x1, y1=None, x2=None, y2=None):
@@ -121,7 +141,7 @@ class Line:
                      + (self.start.y - self.end.y) ** 2)
 
 class Bounds:
-  def __init__(self, origin, size=None, ll=None):
+  def __init__(self, origin, size=None, br=None):
     if isarray(origin) and len(origin) == 4:
         self.origin = Point(origin[:2])
         self.size = Size(origin[2:])
@@ -135,9 +155,9 @@ class Bounds:
           self.size = Size(size)
         else:
           self.size = size
-      elif not ll is None:
-        if isarray(ll):
-          pt = Point(ll)
+      elif not br is None:
+        if isarray(br):
+          pt = Point(br)
           self.size = Size(pt.x - self.origin.x + 1, pt.y - self.origin.y + 1)
         else:
           self.size = size
@@ -163,18 +183,38 @@ class Bounds:
   def x1(self):
     return self.x
 
+  @x1.setter
+  def x1(self, val):
+    self.origin.x = val
+    return
+  
   @property
   def y1(self):
     return self.y
 
+  @y1.setter
+  def y1(self, val):
+    self.origin.y = val
+    return
+  
   @property
   def x2(self):
     return self.origin.x + self.size.width - 1
 
+  @x2.setter
+  def x2(self, val):
+    self.size.width = self.origin.x + val + 1
+    return
+  
   @property
   def y2(self):
     return self.origin.y + self.size.height - 1
 
+  @y2.setter
+  def y2(self, val):
+    self.size.height = self.origin.y + val + 1
+    return
+  
   @property
   def topLeft(self):
     return self.origin
@@ -199,13 +239,17 @@ class Bounds:
   def cv(self):
     return [self.topLeft.cv, self.bottomRight.cv]
 
+  @property
+  def aslist(self):
+    return [self.x1, self.y1, self.x2, self.y2]
+  
   def intersection(self, aRect):
     x1 = max(self.x1, aRect.x1)
     y1 = max(self.y1, aRect.y1)
     x2 = min(self.x2, aRect.x2)
     y2 = min(self.y2, aRect.y2)
     if x1 <= x2 and y1 <= y2:
-      return Rectangle(origin=(x1, y1), ll=(x2, y2))
+      return Rectangle(origin=(x1, y1), br=(x2, y2))
     return None
 
   def __repr__(self):

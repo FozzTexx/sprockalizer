@@ -170,7 +170,7 @@ class Gate:
       top = self.l_gate[1]
     if not right or not top:
       print("ABORT")
-      print(self.b_gate, "\n", self.l_gate, "\n", guess, "\n", self.prev_bounds.cv)
+      print(self.b_gate, "\n", self.l_gate, "\n", guess, "\n", self.prev_bounds)
       return None
     if line.NN(self.prev_bounds):
       height = self.prev_bounds.height
@@ -236,7 +236,7 @@ class Gate:
       best[missing] = np.array(self.l_gate)[missing]
     if None in best[:4]:
       print("TOO MUCH MISSING")
-      print(best, "\n", self.b_gate, "\n", self.l_gate, "\n", guess, "\n", self.prev_bounds.cv)
+      print(best, "\n", self.b_gate, "\n", self.l_gate, "\n", guess, "\n", self.prev_bounds)
       return None
 
     if line.NN(best[1]) and line.NN(best[2]) \
@@ -313,7 +313,7 @@ class Gate:
   @property
   def bounds(self):
     if self.found:
-      return line.Bounds(self.best[:2], ll=self.best[2:4])
+      return line.Bounds(self.best[:2], br=self.best[2:4])
     else:
       return self.prev_bounds
     return None
@@ -321,3 +321,12 @@ class Gate:
   @property
   def found(self):
     return line.NN(self.best)
+
+  @property
+  def stats(self):
+    a = [None, None, None, None]
+    if self.found:
+      a = list(self.best[:4])
+    a += self.b_gate[:4]
+    a += self.l_gate[:4]
+    return a
