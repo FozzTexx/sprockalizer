@@ -49,7 +49,10 @@ def draw_lines(img, lines, color, thickness):
   return
 
 def get_mode(arr, col):
-  a = arr[:, col]
+  if col is not None:
+    a = arr[:, col]
+  else:
+    a = arr
   a = a[a[:] != None]
   if len(a) == 0:
     return None
@@ -218,6 +221,7 @@ def pass2(movie, gate_stats, start, end, path):
   cv2.namedWindow("2", cv2.WINDOW_NORMAL)
   cv2.namedWindow("3", cv2.WINDOW_NORMAL)
   cv2.namedWindow("4", cv2.WINDOW_NORMAL)
+  cv2.namedWindow("5", cv2.WINDOW_NORMAL)
     
   doStep = singleStep = True
   done = False
@@ -323,11 +327,25 @@ def pass2(movie, gate_stats, start, end, path):
         gray[mwhite] = 255
         cols = np.sum(gray, axis=0)
         rows = np.sum(gray, axis=1)
-        p_rows = 1 - (rows / (frame.shape[1] * 255))
-        p_cols = 1 - (cols / (frame.shape[0] * 255))
+        g_rows = 1 - (rows / (w * 255))
+        g_cols = 1 - (cols / (h * 255))
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gwhite = gray[int(h/2), 0]
+        mblack = np.where(gray < gwhite - 10)
+        mwhite = np.where(gray >= gwhite - 10)
+        gray[mblack] = 0
+        gray[mwhite] = 255
+        rows = np.sum(gray, axis=1)
+        s_rows = rows / (w * 255)
+        cols = np.sum(gray[:int(h/2)], axis=0)
+        s_tcols = cols / ((h / 2) * 255)
+        cols = np.sum(gray[int(h/2):], axis=0)
+        s_bcols = cols / ((h / 2) * 255)
+        
         tb_offset = frame.shape[0] - gate_height
-        top_rows = p_rows[:tb_offset]
-        bot_rows = p_rows[frame.shape[0] - tb_offset:]
+        top_rows = g_rows[:tb_offset]
+        bot_rows = g_rows[frame.shape[0] - tb_offset:]
         tmax = np.max(top_rows)
         tmax2 = tmax - 0.01
         w = np.where(top_rows < tmax - 0.01)
@@ -345,18 +363,93 @@ def pass2(movie, gate_stats, start, end, path):
           tpeaks = np.where(top_rows == tmax)[0]
         if not len(bpeaks):
           bpeaks = np.where(bot_rows == tmax)[0]
+        used_bounds = used_border = False
+
+        lcheck1 = np.zeros(shape=gray.shape, dtype=np.uint8)
+        for y, v in enumerate(s_rows):
+          x = int(v * lcheck1.shape[1])
+          cv2.line(lcheck1, (0, y), (x, y), 255, 5)
+
+        lcheck2 = np.zeros(shape=gray.shape, dtype=np.uint8)
+        for x, v in enumerate(s_tcols):
+          y = int(v * lcheck2.shape[0] / 2)
+          cv2.line(lcheck2, (x, int(h/2)), (x, int(h/2)-y), 255, 5)
+        for x, v in enumerate(s_bcols):
+          y = int(v * lcheck2.shape[0] / 2)
+          cv2.line(lcheck2, (x, int(h/2)), (x, int(h/2)+y), 255, 5)
+
+        lcheck1 &= lcheck2
+        h, w = lcheck1.shape
+        y1 = int(h/2 - sprocket_height / 2 - (h - gate_height))
+        y2 = y1 + sprocket_height + (h - gate_height) * 2
+        x1 = 0
+        x2 = w - gate_width + 10
+        spr_mask = lcheck1[y1:y2, x1:x2]
+
+        h, w = spr_mask.shape[:2]
+        m = int((frame.shape[0] - gate_height) / 2)
+        mask = np.zeros((h + 2, w + 2), np.uint8)
+        cv2.floodFill(spr_mask, mask, (0, int(h/2)), 127, loDiff=2, upDiff=2);
+        spr_mask = mask[1:-1, 1:-1] * 255
+        sprocket_c = cv2.Canny(spr_mask, 50, 100, apertureSize=3)
+        cv2.imshow("5", spr_mask)
+        s_nz = np.where(sprocket_c > 0)
+        tsc = sprocket_c[:int(h/2) - m]
+        s_tnz = np.where(tsc > 0)
+        bsc = sprocket_c[int(h/2) + m:]
+        s_bnz = np.where(bsc > 0)
+        spr_pts = cv2.findNonZero(spr_mask)
+        spr_pts.shape = (-1, 2)
+        # spr_bounds = [0, np.min(spr_pts[:, 1]),
+        #               get_mode(s_nz[1], None), np.max(spr_pts[:, 1])]
+        spr_bounds = [0, get_mode(s_tnz[0], None),
+                      get_mode(s_nz[1], None), get_mode(s_bnz[0], None)]
+        if spr_bounds[1] is None:
+          spr_bounds[1] = np.min(spr_pts[:, 1])
+        spr_bounds[1] += y1
+        if spr_bounds[3] is None:
+          spr_bounds[3] = np.max(spr_pts[:, 1]) - int(h/2) + m
+        spr_bounds[3] += y1 + int(h/2) + m
+        if spr_bounds[2] is None:
+          spr_bounds[2] = frame.shape[1]
+        print("SPR_BOUNDS", spr_bounds, sprocket_height, spr_bounds[3] - spr_bounds[1])
+
+        rmax = np.max(g_cols) - 0.15
+        rgt_cols = g_cols[gate_width - 20:]
+        rpeak = np.where(rgt_cols >= rmax)[0]
+        rpeak += gate_width - 20
+        rdiff = np.diff(rpeak)
+        
+        h_test = abs(spr_bounds[3] - spr_bounds[1] - sprocket_height)
+        w2_test = w_test = abs(spr_bounds[2] - spr_br[0])
+        if len(rpeak):
+          w2_test = abs(np.min(rpeak) - gate_width - spr_bounds[2])
+        w3_test = abs(spr_rgt - spr_bounds[2])
+        if h_test <= 20 and (w_test <= 15 or w2_test < 10 or w3_test <= 5):
+          print("USE BOUNDS")
+          spr_tl[1] = spr_bounds[1] + \
+                      int((spr_bounds[3] - spr_bounds[1]) / 2 - sprocket_height / 2)
+          spr_br[1] = spr_tl[1] + sprocket_height
+          spr_br[0] = spr_bounds[2]
+          used_bounds = True
+        else:
+          print("BAD BOUNDS", h_test, w_test, w2_test, w3_test)
+
+        tavg = np.average(top_rows)
+        bavg = np.average(bot_rows)
+        tmod = get_mode(top_rows, None)
+        bmod = get_mode(bot_rows, None)
         print("GMAX", abs(tmax - bmax),
-              "top=%0.5f/%0.5f/%0.5f" % (tmax, tmax2, np.average(top_rows)),
-              "bot=%0.5f/%0.5f/%0.5f" % (bmax, bmax2, np.average(bot_rows)),
+              "top=%0.5f/%0.5f/%0.5f/%0.5f" % (tmax, tmax2, tavg, tmod),
+              "bot=%0.5f/%0.5f/%0.5f/%0.5f" % (bmax, bmax2, bavg, bmod),
               tpeaks, bpeaks)
-        used_border = False
         if len(tpeaks) and len(bpeaks) and \
            len(tpeaks) <= 5 and len(bpeaks) <= 5 and \
            (abs(tmax - bmax) < 0.3 or \
-            ((tmax - np.average(top_rows)) / tmax > 0.70 and \
-             (bmax - np.average(bot_rows)) / bmax > 0.70)):
+            ((tmax - tavg) / tmax > 0.70 and (bmax - bavg) / bmax > 0.70)) \
+           and (not used_bounds or (tmax - tmax2 > 0.03 and bmax - bmax2 > 0.03)) \
+           and tmod < tmax - 0.05 and bmod < bmax - 0.05:
           tb_diff = np.tile(bpeaks, len(tpeaks)).reshape(-1, len(tpeaks))
-          print("TILE", tb_diff)
           tb_diff = np.subtract(tb_diff, tpeaks)
           tb_diff -= gate_height
           tb_diff = np.abs(tb_diff)
@@ -368,11 +461,6 @@ def pass2(movie, gate_stats, start, end, path):
           spr_tl[1] = gate_tl[1] + gate_offset + 1
           used_border = True
 
-        rmax = np.max(p_cols) - 0.15
-        rgt_cols = p_cols[gate_width - 20:]
-        rpeak = np.where(rgt_cols >= rmax)[0]
-        rpeak += gate_width - 20
-        rdiff = np.diff(rpeak)
         if len(rpeak):
           print("GRIGHT", rmax, np.min(rpeak), np.average(rpeak))
           if np.min(rpeak) > gate_width and len(np.where(rdiff > 1)[0]) == 0:
@@ -382,19 +470,19 @@ def pass2(movie, gate_stats, start, end, path):
         
         lcheck = np.ones(shape=gray.shape, dtype=np.uint8)
         lcheck *= 255
-        for y, v in enumerate(p_rows):
+        for y, v in enumerate(g_rows):
           x = int(v * lcheck.shape[1])
           cv2.line(lcheck, (0, y), (x, y), 0, 5)
         cv2.imshow("3", lcheck)
 
         lcheck = np.ones(shape=gray.shape, dtype=np.uint8)
         lcheck *= 255
-        for x, v in enumerate(p_cols):
+        for x, v in enumerate(g_cols):
           y = int(v * lcheck.shape[0])
           cv2.line(lcheck, (x, 0), (x, y), 0, 5)
         cv2.imshow("4", lcheck)
 
-        if not used_border and \
+        if not used_border and not used_bounds and \
            ((spr_toff > 5 and spr_hoff > 2) or spr_hoff > 10 or spr_tl[1] - gate_offset < 0):
           print("BAD SPROCKET")
           prev_top = next_top = -1
