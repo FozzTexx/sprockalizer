@@ -18,6 +18,7 @@ def build_argparser():
   parser.add_argument("stats", nargs="?", help="stats file to read")
   parser.add_argument("--start", default=0, type=int, help="frame number to start at")
   parser.add_argument("--end", default=-1, type=int, help="frame number to stop at")
+  parser.add_argument("--nowait", action="store_true", help="don't wait for keypress to start")
   return parser
 
 COLORS = ((0x00,0x00,0x00), (0xaa,0x00,0x00), (0x00,0xaa,0x00), (0xaa,0xaa,0x00),
@@ -67,7 +68,7 @@ def best_diff(arr, col1, col2):
   offset = np.subtract(offset[:, 0], offset[:, 1])
   return stats.mode(offset)[0][0]
 
-def pass1(movie, start, end):
+def pass1(movie, start, end, name, nowaitFlag=False):
   gate_stats = []
   spr_size = 0
   doStep = singleStep = True
@@ -76,7 +77,10 @@ def pass1(movie, start, end):
   curFrame = start
   done = False
 
-  cv2.namedWindow("1", cv2.WINDOW_NORMAL)
+  if nowaitFlag:
+    singleStep = False
+    
+  cv2.namedWindow(name, cv2.WINDOW_NORMAL)
   cv2.namedWindow("2", cv2.WINDOW_NORMAL)
   cv2.namedWindow("3", cv2.WINDOW_NORMAL)
   
@@ -162,7 +166,7 @@ def pass1(movie, start, end):
         cv2.putText(inframe, label, (10, inframe.shape[0] - 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 5, (255,255,255), 7)
 
-        cv2.imshow("1", inframe)
+        cv2.imshow(name, inframe)
         cv2.imshow("2", lcheck)
         if NN(cropped):
           cv2.imshow("3", cropped)
@@ -200,7 +204,7 @@ GS_GATETOP = 6
 GS_GATERGT = 7
 GS_GATEBOT = 8
 
-def pass2(movie, gate_stats, start, end, path):
+def pass2(movie, gate_stats, start, end, path, name, nowaitFlag=False):
   crops = []
   
   print()
@@ -217,7 +221,7 @@ def pass2(movie, gate_stats, start, end, path):
   ideal_height = (FRAME_SUPER8[1] / SPROCKET_SUPER8[1]) * sprocket_height
   print("IDEAL SIZE", ideal_width, 'x', ideal_height)
 
-  cv2.namedWindow("1", cv2.WINDOW_NORMAL)
+  cv2.namedWindow(name, cv2.WINDOW_NORMAL)
   cv2.namedWindow("2", cv2.WINDOW_NORMAL)
   cv2.namedWindow("3", cv2.WINDOW_NORMAL)
   cv2.namedWindow("4", cv2.WINDOW_NORMAL)
@@ -228,6 +232,9 @@ def pass2(movie, gate_stats, start, end, path):
   curFrame = start
   ret = movie.set(cv2.CAP_PROP_POS_FRAMES, curFrame)
 
+  if nowaitFlag:
+    singleStep = False
+  
   writer = None
   if path:
     base, ext = os.path.splitext(path)
@@ -330,18 +337,22 @@ def pass2(movie, gate_stats, start, end, path):
         g_rows = 1 - (rows / (w * 255))
         g_cols = 1 - (cols / (h * 255))
 
+        s_within = Bounds((0, int(h/2 - sprocket_height / 2 - (h - gate_height))),
+                          size=(w - gate_width + 10, sprocket_height + (h - gate_height) * 2))
+        
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gwhite = gray[int(h/2), 0]
+        gray = gray[s_within.y1:s_within.y2, s_within.x1:s_within.x2]        
         mblack = np.where(gray < gwhite - 10)
         mwhite = np.where(gray >= gwhite - 10)
         gray[mblack] = 0
         gray[mwhite] = 255
         rows = np.sum(gray, axis=1)
-        s_rows = rows / (w * 255)
-        cols = np.sum(gray[:int(h/2)], axis=0)
-        s_tcols = cols / ((h / 2) * 255)
-        cols = np.sum(gray[int(h/2):], axis=0)
-        s_bcols = cols / ((h / 2) * 255)
+        s_rows = rows / (s_within.width * 255)
+        cols = np.sum(gray[:int(s_within.height/2)], axis=0)
+        s_tcols = cols / ((s_within.height / 2) * 255)
+        cols = np.sum(gray[int(s_within.height/2):], axis=0)
+        s_bcols = cols / ((s_within.height / 2) * 255)
         
         tb_offset = frame.shape[0] - gate_height
         top_rows = g_rows[:tb_offset]
@@ -371,28 +382,31 @@ def pass2(movie, gate_stats, start, end, path):
           cv2.line(lcheck1, (0, y), (x, y), 255, 5)
 
         lcheck2 = np.zeros(shape=gray.shape, dtype=np.uint8)
+        h, w = lcheck2.shape[:2]
         for x, v in enumerate(s_tcols):
-          y = int(v * lcheck2.shape[0] / 2)
-          cv2.line(lcheck2, (x, int(h/2)), (x, int(h/2)-y), 255, 5)
+          y = int(v * h / 2)
+          if y:
+            cv2.line(lcheck2, (x, int(h/2)), (x, int(h/2)-y), 255, 5)
         for x, v in enumerate(s_bcols):
-          y = int(v * lcheck2.shape[0] / 2)
-          cv2.line(lcheck2, (x, int(h/2)), (x, int(h/2)+y), 255, 5)
+          y = int(v * h / 2)
+          if y:
+            cv2.line(lcheck2, (x, int(h/2)), (x, int(h/2)+y), 255, 5)
 
-        lcheck1 &= lcheck2
-        h, w = lcheck1.shape
-        y1 = int(h/2 - sprocket_height / 2 - (h - gate_height))
-        y2 = y1 + sprocket_height + (h - gate_height) * 2
-        x1 = 0
-        x2 = w - gate_width + 10
-        spr_mask = lcheck1[y1:y2, x1:x2]
+        spr_mask = lcheck1 & lcheck2
 
-        h, w = spr_mask.shape[:2]
         m = int((frame.shape[0] - gate_height) / 2)
         mask = np.zeros((h + 2, w + 2), np.uint8)
         cv2.floodFill(spr_mask, mask, (0, int(h/2)), 127, loDiff=2, upDiff=2);
         spr_mask = mask[1:-1, 1:-1] * 255
+        mask = np.zeros((h + 2, w + 2), np.uint8)
+        cv2.floodFill(gray, mask, (0, int(h/2)), 127, loDiff=2, upDiff=2);
+        mask = mask[1:-1, 1:-1] * 255
+        spr_mask &= mask
         sprocket_c = cv2.Canny(spr_mask, 50, 100, apertureSize=3)
-        cv2.imshow("5", spr_mask)
+
+        img = np.concatenate((spr_mask, gray, sprocket_c), axis=1)
+        cv2.imshow("5", img)
+        
         s_nz = np.where(sprocket_c > 0)
         tsc = sprocket_c[:int(h/2) - m]
         s_tnz = np.where(tsc > 0)
@@ -406,14 +420,25 @@ def pass2(movie, gate_stats, start, end, path):
                       get_mode(s_nz[1], None), get_mode(s_bnz[0], None)]
         if spr_bounds[1] is None:
           spr_bounds[1] = np.min(spr_pts[:, 1])
-        spr_bounds[1] += y1
+        spr_bounds[1] += s_within.y1
         if spr_bounds[3] is None:
           spr_bounds[3] = np.max(spr_pts[:, 1]) - int(h/2) + m
-        spr_bounds[3] += y1 + int(h/2) + m
+        spr_bounds[3] += s_within.y1 + int(h/2) + m
         if spr_bounds[2] is None:
           spr_bounds[2] = frame.shape[1]
         print("SPR_BOUNDS", spr_bounds, sprocket_height, spr_bounds[3] - spr_bounds[1])
 
+        spr_percent = len(np.where(spr_mask > 0)[0]) / (h * w)
+        spr_area = ((spr_bounds[3] - spr_bounds[1]) * spr_bounds[2]) / (h * w)
+        print("SPR PERCENT", spr_percent, spr_area, abs(spr_area - spr_percent),
+              (spr_bounds[3] - spr_bounds[1]) / sprocket_height)
+
+        spr_very_good = False
+        if abs(spr_area - spr_percent) < 0.04 and \
+           abs(1.0 - (spr_bounds[3] - spr_bounds[1]) / sprocket_height) < 0.08:
+          print("SPROCKET VERY GOOD")
+          spr_very_good = True
+          
         rmax = np.max(g_cols) - 0.15
         rgt_cols = g_cols[gate_width - 20:]
         rpeak = np.where(rgt_cols >= rmax)[0]
@@ -421,11 +446,17 @@ def pass2(movie, gate_stats, start, end, path):
         rdiff = np.diff(rpeak)
         
         h_test = abs(spr_bounds[3] - spr_bounds[1] - sprocket_height)
-        w2_test = w_test = abs(spr_bounds[2] - spr_br[0])
+        if spr_br[0] is not None:
+          w2_test = w_test = abs(spr_bounds[2] - spr_br[0])
+        else:
+          w2_test = w_test = 999
         if len(rpeak):
           w2_test = abs(np.min(rpeak) - gate_width - spr_bounds[2])
-        w3_test = abs(spr_rgt - spr_bounds[2])
-        if h_test <= 20 and (w_test <= 15 or w2_test < 10 or w3_test <= 5):
+        if spr_rgt is not None:
+          w3_test = abs(spr_rgt - spr_bounds[2])
+        else:
+          w3_test = 999
+        if (h_test <= 20 and (w_test <= 15 or w2_test < 10 or w3_test <= 5)) or spr_very_good:
           print("USE BOUNDS")
           spr_tl[1] = spr_bounds[1] + \
                       int((spr_bounds[3] - spr_bounds[1]) / 2 - sprocket_height / 2)
@@ -461,21 +492,23 @@ def pass2(movie, gate_stats, start, end, path):
           spr_tl[1] = gate_tl[1] + gate_offset + 1
           used_border = True
 
-        if len(rpeak):
+        if not spr_very_good and len(rpeak):
           print("GRIGHT", rmax, np.min(rpeak), np.average(rpeak))
           if np.min(rpeak) > gate_width and len(np.where(rdiff > 1)[0]) == 0:
             print("NICE")
-            gate_br[0] = np.min(rpeak)
-            spr_br[0] = gate_tl[0] = gate_br[0] - gate_width + 1
+            x = np.min(rpeak)
+            if abs(spr_percent - spr_area) > 0.05 or x - gate_width + 1 > spr_br[0]:
+              gate_br[0] = x
+              spr_br[0] = gate_tl[0] = gate_br[0] - gate_width + 1
         
-        lcheck = np.ones(shape=gray.shape, dtype=np.uint8)
+        lcheck = np.ones(shape=frame.shape, dtype=np.uint8)
         lcheck *= 255
         for y, v in enumerate(g_rows):
           x = int(v * lcheck.shape[1])
           cv2.line(lcheck, (0, y), (x, y), 0, 5)
         cv2.imshow("3", lcheck)
 
-        lcheck = np.ones(shape=gray.shape, dtype=np.uint8)
+        lcheck = np.ones(shape=frame.shape, dtype=np.uint8)
         lcheck *= 255
         for x, v in enumerate(g_cols):
           y = int(v * lcheck.shape[0])
@@ -505,14 +538,14 @@ def pass2(movie, gate_stats, start, end, path):
               if spr_top - gate_offset >= 0:
                 print("USE MODE TOP")
                 spr_tl[1] = spr_top
-              elif spr_bot - sprocket_height - gate_offset >= 0:
+              elif spr_bot is not None and spr_bot - sprocket_height - gate_offset >= 0:
                 print("USE MODE BOTTOM")
                 spr_tl[1] = spr_bot - sprocket_height
               else:
                 print("USE MODE ALL")
                 spr_tl[1] = get_mode(gate_stats, GS_SPRTOP)
             doStep = False
-            singleStep = True
+            #singleStep = True
 
         # if abs(spr_rgt - spr_br[0]) > 5:
         #   sg = -1
@@ -559,9 +592,12 @@ def pass2(movie, gate_stats, start, end, path):
       inframe = cropped.copy()
       cv2.putText(inframe, label, (10, inframe.shape[0] - 40),
                   cv2.FONT_HERSHEY_SIMPLEX, 5, (0,0,0), 10)
+      color = CLR_WHITE
+      if spr_very_good:
+        color = CLR_LGREEN
       cv2.putText(inframe, label, (10, inframe.shape[0] - 40),
-                  cv2.FONT_HERSHEY_SIMPLEX, 5, (255,255,255), 7)
-      cv2.imshow("1", inframe)
+                  cv2.FONT_HERSHEY_SIMPLEX, 5, color, 7)
+      cv2.imshow(name, inframe)
 
       d_frame = frame.copy()
       if None not in gate_tl and None not in gate_br:
@@ -580,9 +616,9 @@ def pass2(movie, gate_stats, start, end, path):
       cv2.imshow("2", d_frame)
       recrop = False
 
-      c_stats = [curFrame] + crop.aslist
+      c_stats = [curFrame - 1] + crop.aslist
       if len(crops) + start > curFrame:
-        crops[curFrame - start] = c_stats
+        crops[curFrame - start - 1] = c_stats
       else:
         crops.append(c_stats)
         
@@ -635,9 +671,10 @@ def main():
   ret = movie.set(cv2.CAP_PROP_POS_FRAMES, args.start)
 
   base, ext = os.path.splitext(args.file)
+  name = os.path.basename(base)
   wrpath = base + ".stats"
   if not args.stats:
-    gate_stats = pass1(movie, args.start, args.end)
+    gate_stats = pass1(movie, args.start, args.end, name, args.nowait)
     print("TYPE", gate_stats.dtype)
     wr_stats = gate_stats.copy()
     wr_stats[np.where(wr_stats == None)] = -1
@@ -648,7 +685,7 @@ def main():
     gate_stats[np.where(gate_stats == -1)] = None
 
   if len(gate_stats):
-    crops = pass2(movie, gate_stats, args.start, args.end, None)
+    crops = pass2(movie, gate_stats, args.start, args.end, None, name, args.nowait)
     if len(crops):
       wrpath = base + ".crops"
       crops = np.array(crops)
