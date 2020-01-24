@@ -9,6 +9,7 @@ def build_argparser():
   parser = argparse.ArgumentParser()
   parser.add_argument("files", nargs="+", help="input file")
   parser.add_argument("--margin", default=0, type=int, help="additional pixels to crop")
+  parser.add_argument("--fps", default=18, type=int, help="frames per second")
   parser.add_argument("--flag", action="store_true", help="flag to do something")
   return parser
 
@@ -22,7 +23,7 @@ def cropFrame(frame, bounds, margin=0):
   cropped[:h, :w] = source
   return cropped
 
-def cropFile(source, margin):
+def cropFile(source, margin, fps):
   movie = cv2.VideoCapture(source)
 
   base, ext = os.path.splitext(source)
@@ -32,8 +33,12 @@ def cropFile(source, margin):
 
   path = base + "-crop.mp4"
   four_cc = cv2.VideoWriter_fourcc(*"MP4V")
-  bounds = Bounds(crops[0, 1:3], br=crops[0, 3:5])
-  writer = cv2.VideoWriter(path, four_cc, 18, (bounds.width, bounds.height))
+  size = Bounds(crops[0, 1:3], br=crops[0, 3:5]).size
+  size.width -= margin * 2
+  size.height -= margin * 2
+  
+  print("Writing to ", path, size)
+  writer = cv2.VideoWriter(path, four_cc, fps, (size.width, size.height))
 
   name = os.path.basename(base)
   cv2.namedWindow(name, cv2.WINDOW_NORMAL)
@@ -60,7 +65,7 @@ def main():
   args = build_argparser().parse_args()
 
   for path in args.files:
-    if not cropFile(path, args.margin):
+    if not cropFile(path, args.margin, args.fps):
       break
 
   return
