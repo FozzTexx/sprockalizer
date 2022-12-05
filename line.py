@@ -4,12 +4,6 @@ import numpy as np
 def isarray(a):
   return isinstance(a, list) or isinstance(a, tuple) or isinstance(a, np.ndarray)
 
-# Numpy arrays need to be notted to check if they are Not None. It
-# gets ugly repeating that over and over in conditions so make a silly
-# little function to clean it up.
-def NN(v):
-  return not v is None
-
 class Point:
   def __init__(self, point, y=None):
     if isinstance(point, list) or isinstance(point, tuple):
@@ -265,7 +259,7 @@ def linify(lines, img, minlen):
   thickness = 2
   ANGLE_LIMIT = 3
 
-  if NN(lines):
+  if lines is not None:
     # print("LINIFY", len(lines), lines.shape, lines.ndim)
     if lines.ndim != 3:
       for p in lines:
@@ -291,7 +285,7 @@ def linify(lines, img, minlen):
           elif abs(90 - angle) <= ANGLE_LIMIT and l > 10:
             vertical.append(line)
 
-    if NN(img):
+    if img is not None:
       draw_lines(img, vertical, CLR_LGREEN, thickness)
       draw_lines(img, horizontal, CLR_LRED, thickness)
 

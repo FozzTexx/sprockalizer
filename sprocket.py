@@ -25,7 +25,7 @@ class Sprocket:
                              minLineLength=5, maxLineGap=5)
     spr_h, spr_v = line.linify(lines1, None, 5)
 
-    if line.NN(spr_h) and line.NN(spr_v):
+    if spr_h is not None and spr_v is not None:
       self.find_sprocket(frame.shape[1::-1], spr_h, spr_v)
     return
 
@@ -83,7 +83,7 @@ class Sprocket:
 
   @property
   def found(self):
-    return line.NN(self.top) and line.NN(self.right) and line.NN(self.bottom)
+    return self.top is not None and self.right is not None and self.bottom is not None
   
   @property
   def bounds(self):
@@ -109,7 +109,7 @@ class Sprocket:
   @property
   def stats(self):
     height = None
-    if line.NN(self.top) and line.NN(self.bottom):
+    if self.top is not None and self.bottom is not None:
       height = self.bottom - self.top
     return [self.top, self.right, self.bottom, height]
 

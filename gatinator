@@ -5,7 +5,7 @@
 import argparse
 import cv2
 from sprocket import Sprocket, FRAME_SUPER8, SPROCKET_SUPER8
-from line import NN, Bounds
+from line import Bounds
 from gate import Gate
 import numpy as np
 from scipy import stats
@@ -133,7 +133,7 @@ def pass1(movie, start, end, name, nowaitFlag=False):
         before = frame
         cropped = None
         if gate.found:
-          if not NN(frameSize) or len(gate_stats) < 20:
+          if frameSize is None or len(gate_stats) < 20:
             frameSize = (gate.bounds.width - 20, gate.bounds.height - 20)
           size = frame.shape[1::-1]
 
@@ -145,7 +145,7 @@ def pass1(movie, start, end, name, nowaitFlag=False):
         else:
           print("NO FRAME FOUND")
 
-        if NN(gate.bounds):
+        if gate.bounds is not None:
           rect = [gate.bounds.x1 + 10,
                   int((gate.bounds.y1 + gate.bounds.y2) / 2 - frameSize[1] / 2)]
           if rect[0] < 0:
@@ -168,7 +168,7 @@ def pass1(movie, start, end, name, nowaitFlag=False):
 
         cv2.imshow(name, inframe)
         cv2.imshow("2", lcheck)
-        if NN(cropped):
+        if cropped is not None:
           cv2.imshow("3", cropped)
 
         curFrame += 1
