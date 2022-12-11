@@ -1,332 +1,257 @@
 import sprocket as sp
-import line
+from line import Bounds
 import cv2
 from scipy import stats
+from scipy.signal import find_peaks
 import numpy as np
 import math
+from color import *
 
-def find_contours(image):
-  blank = np.zeros(shape=image.shape, dtype=np.uint8)
-  contours, hierarchy = cv2.findContours(image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-  poly = []
-  for cnt in contours:
-    epsilon = 0.001 * cv2.arcLength(cnt, True)
-    approx = cv2.approxPolyDP(cnt, epsilon, True)
-    poly.append(approx)
-    cv2.drawContours(blank, [approx], -1, 255)
-  kernel = np.ones((2,2), np.uint8) * 255
-  blank = cv2.dilate(blank, kernel, iterations = 1)
-  return blank, np.array(poly)
-
-def longest_near(rc, dist, lines, xy):
-  GROUPING = 3
-
-  if lines is None:
+def get_mode(arr, col):
+  if col is not None:
+    a = arr[:, col]
+  else:
+    a = arr
+  a = a[a[:] != None]
+  if len(a) == 0:
     return None
-  # FIXME - group lines into one score
-  scores = []
-  for li in lines:
-    l = math.sqrt((li[0][0] - li[1][0]) ** 2 + (li[0][1] - li[1][1]) ** 2)
-    r = (li[0][xy] + li[1][xy]) / 2
-    d = abs(rc - r) + 1
-    if d > dist:
-      continue
-    score = l / d
-    scores.append([score, r, l, d])
-  scores.sort(key=lambda x: x[1])
-  scores = np.array(scores)
-  #print("SCORES", scores)
-  best = None
-  idx = 0
-  while idx < len(scores):
-    score = scores[idx]
-    close = scores[np.logical_and(scores[:, 1] >= score[1],
-                                  scores[:, 1] <= score[1] + GROUPING)]
-    #print("CLOSE", close)
-    r = np.average(close[:, 1])
-    l = np.sum(close[:, 2])
-    d = np.average(close[:, 3])
-    s = l / d
-    #print("NEAR", rc, dist, s, r, l, d)
-    if best is None or s > best[0]:
-      best = [s, r, l, d]
-    idx += len(close)
-  return best
-
-def lines_near(lower, upper, lines, xy):
-  pts = []
-  if lines is None:
-    return pts
-  for li in lines:
-    if li[0][xy] > lower and li[0][xy] < upper \
-       and li[1][xy] > lower and li[1][xy] < upper:
-      pts.append(li[0])
-      pts.append(li[1])
-  if not len(pts):
-    return pts
-  a = np.array(pts)
-  return np.array(pts)[:, xy]
+  return stats.mode(a)[0][0]
 
 class Gate:
-  def __init__(self, sprocket, frame, previous, spr_size):
-    self.b_gate = self.l_gate = self.best = self.prev_bounds = None
-    if previous is not None:
-      self.prev_bounds = previous.bounds
-    
-    gate_black = stats.mode(frame[:, -1])[0][0]
-    gate = 255 * np.ones(shape=frame.shape, dtype=np.uint8)
-    sel = np.where(frame <= gate_black + 30)
-    gate[sel] = frame[sel]
-    gate_t = gate.copy()
-    gate_t[sel] = 0
+  MARGIN = 20
 
-    frame_f = gate.copy()
-    h, w = frame.shape[:2]
-    mask = np.zeros((h + 2, w + 2), np.uint8)
-    cv2.floodFill(frame_f, mask, (w - 1, int(h / 2)), 255, loDiff=2, upDiff=2);
-    gate = mask[1:-1, 1:-1] * 255
+  def __init__(self, frame, sprocket):
+    self.bounds = None
 
-    gate_c, lines2 = find_contours(gate)
-    frm_h, frm_v = line.linify(lines2, None, 20)
+    if frame is None:
+      return
 
-    ret, frame_t = cv2.threshold(frame, 127, 255, cv2.THRESH_BINARY)
-    gate_t, lines3 = find_contours(frame_t)
-    frm2_h, frm2_v = line.linify(lines3, None, 20)
+    cv2.namedWindow("3", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("4", cv2.WINDOW_NORMAL)
 
-    if frm2_h is not None:
-      frm_h += frm2_h
-    if frm2_v is not None:
-      frm_v += frm2_v    
+    original = frame.copy()
+    gray = frame
+    if len(gray.shape) == 3:
+      gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # draw_lines(lcheck, frm_h, CLR_LRED, 2)
-    # draw_lines(lcheck, frm_v, CLR_LGREEN, 2)
+    h, w = gray.shape
+    gblack = gray[int(h / 2), w - 1]
+    mblack = np.where(gray <= gblack + 10)
+    mwhite = np.where(gray > gblack + 10)
+    gray[mblack] = 0
+    gray[mwhite] = 255
+    cols = np.sum(gray, axis=0)
+    rows = np.sum(gray, axis=1)
+    g_rows = 1 - (rows / (w * 255))
+    g_cols = 1 - (cols / (h * 255))
 
-    gate_i = 255 - gate
-    newfr = self.find_gate(gate_i, previous, frm_h, frm_v, sprocket, spr_size)
+    mm_scale = est_top = est_bot = gate_height = None
+    if sprocket.top and sprocket.bottom:
+      spr_height = sprocket.bottom - sprocket.top
+      mm_scale = spr_height / sprocket.SPROCKET_SUPER8[1]
+      v_center = int(spr_height / 2 + sprocket.top)
+      gate_height = sprocket.FRAME_SUPER8[1] * mm_scale
+      est_top = v_center - gate_height / 2
+      est_bot = est_top + gate_height
+      if est_bot >= frame.shape[0]:
+        est_bot = frame.shape[0] - 1
+        est_top = est_bot - gate_height
+      t_offset = max(int(est_top - self.MARGIN), 0)
+      b_offset = int(est_bot - self.MARGIN)
+
+      top_rows = g_rows[t_offset:t_offset + self.MARGIN * 2]
+      bot_rows = g_rows[b_offset:b_offset + self.MARGIN * 2]
+
+      cv2.line(frame, (0, int(est_top)), (frame.shape[1], int(est_top)), CLR_LBLUE, 5)
+      cv2.line(frame, (0, int(est_top + gate_height)),
+               (frame.shape[1], int(est_top + gate_height)), CLR_LBLUE, 5)
+
+      print("ESTIMATED",
+            "sprock:", spr_height,
+            "mm:", mm_scale,
+            "gate:", gate_height,
+            "top:", est_top)
+    else:
+      t_offset = 0
+      b_offset = v_center = int(h / 2)
+      top_rows = g_rows[:v_center]
+      bot_rows = g_rows[v_center:]
+
+    MARGIN = 0.02
+    # print("TOP ROWS", len(top_rows))
+    # print("BOT ROWS", b_offset, len(bot_rows))
+    tpeaks = self.get_peaks(top_rows, MARGIN)
+    bpeaks = self.get_peaks(bot_rows, MARGIN)
+    used_bounds = used_border = False
+
+    tpeaks += t_offset
+    bpeaks += b_offset
+
+    if est_top:
+      # print("TPEAKS", tpeaks)
+      # print("BPEAKS", bpeaks)
+      # if not len(bpeaks):
+      #   print("BROWS", bot_rows)
+      est_top = self.best_row(tpeaks, est_top, 40)
+      est_bot = self.best_row(bpeaks, est_bot, 40)
+      # print("ESTIMATED", est_top, est_bot)
+    elif 0 < len(tpeaks) <= 5 and 0 < len(bpeaks) <= 5:
+      est_top = min(tpeaks)
+      est_bot = max(bpeaks)
+
+    x1 = sprocket.right
+    y1 = est_top
+    y2 = est_bot
+    if x1 is not None and y1 is not None and y2 is not None:
+      aspect = sprocket.FRAME_SUPER8[0] / sprocket.FRAME_SUPER8[1]
+      x2 = int(x1 + (y2 - y1) * aspect)
+
+      if x2 < frame.shape[1]:
+        r_offset = x2 - 20
+        rgt_cols = g_cols[r_offset:]
+        cmax = np.max(rgt_cols)
+        cmax2 = cmax - MARGIN
+        w = np.where(rgt_cols < cmax - MARGIN)
+        if len(w[0]):
+          cmax2 = np.max(rgt_cols[w])
+        rmax = np.max(g_cols) - 0.15
+        rpeak = np.where(rgt_cols >= rmax)[0]
+        rpeak += r_offset
+        rdiff = np.diff(rpeak)
+        x2 = self.best_row(rpeak, x2, 100)
+        self.bounds = Bounds((int(x1), int(y1)), br=(int(x2), int(y2)))
+        # print("GATE", self.bounds)
+
+        cv2.line(frame, (0, int(y1)), (frame.shape[1], int(y1)), CLR_GREEN, 5)
+        cv2.line(frame, (0, int(y2)), (frame.shape[1], int(y2)), CLR_GREEN, 5)
+        cv2.line(frame, (x1, 0), (x1, frame.shape[0]), CLR_GREEN, 5)
+        cv2.line(frame, (x2, 0), (x2, frame.shape[0]), CLR_GREEN, 5)
+
+    #   else:
+    #     print("OUT OF FRAME", x2)
+    # else:
+    #   print("TOO MANY PEAKS", len(tpeaks), len(bpeaks))
+    #   print(tpeaks)
+    #   print(bpeaks)
+
+    self.blobify(original)
+
+    lcheck = np.ones(shape=frame.shape, dtype=np.uint8)
+    lcheck *= 255
+    for y, v in enumerate(top_rows):
+      x = int(v * lcheck.shape[1])
+      cv2.line(lcheck, (0, y + t_offset), (x, y + t_offset), 0, 5)
+    for y, v in enumerate(bot_rows):
+      x = int(v * lcheck.shape[1])
+      cv2.line(lcheck, (0, y + b_offset), (x, y + b_offset), 0, 5)
+    if est_top and est_bot:
+      cv2.line(lcheck, (0, int(est_top)), (lcheck.shape[1], int(est_top)), CLR_LBLUE, 5)
+      cv2.line(lcheck, (0, int(est_bot)), (lcheck.shape[1], int(est_bot)), CLR_LBLUE, 5)
+
+    cv2.imshow("3", lcheck)
+
+    lcheck = np.ones(shape=frame.shape, dtype=np.uint8)
+    lcheck *= 255
+    for x, v in enumerate(g_cols):
+      y = int(v * lcheck.shape[0])
+      cv2.line(lcheck, (x, 0), (x, y), 0, 5)
+    cv2.imshow("4", lcheck)
+
     return
 
-  def find_gate(self, frame, previous, horizontal, vertical, sprocket, spr_size):
-    MARGIN = int(30 / 1080 * frame.shape[0])
-    BLACK_LEVEL = 6 * frame.shape[0]
+  def blobify(self, frame):
+    if not self.bounds:
+      return
 
-    self.b_gate = [None, None, None, None, None, None, None, None]
-    guess = sprocket.guess
-    if guess is not None:
-      self.b_gate[0] = guess.x1
-    self.l_gate = self.b_gate.copy()
-
-    cols = np.sum(frame, axis=0)
-    rows = np.sum(frame, axis=1)
-
-    x = r = frame.shape[1]
-    if guess is not None:
-      x = guess.x2
-    if x > r - MARGIN:
-      x = r - MARGIN
-    l = x - MARGIN
-    re = np.where(cols[l:] < BLACK_LEVEL)
-    if len(re[0]):
-      self.b_gate[2] = np.min(re) + l
-    else:
-      rcols = cols[l:]
-      print("RIGHT NOT FOUND", np.min(rcols))
-
-    pts_x = lines_near(l, r, vertical, 0)
-    if len(pts_x):
-      self.l_gate[2] = int(np.median(pts_x))
-
-    y = MARGIN
-    if self.prev_bounds is not None:
-      y = self.prev_bounds.y1
-    elif guess is not None:
-      y = guess.y1
-    if y < MARGIN:
-      y = MARGIN
-    re = np.where(rows < BLACK_LEVEL)
-    re2 = np.where(rows[y - MARGIN:y + MARGIN] < BLACK_LEVEL)
-    if (len(re[0]) and np.max(re) < frame.shape[0] / 2) or len(re2[0]):
-      if len(re2[0]):
-        self.b_gate[1] = np.max(re2) + y - MARGIN
-      else:
-        self.b_gate[1] = np.max(re)
-    else:
-      trows = rows[:y + MARGIN]
-      mrow = np.argmin(trows)
-      if self.prev_bounds is not None and abs(mrow - self.prev_bounds.y1) <= 5:
-        self.b_gate[1] = mrow
-      else:
-        print("TOP NOT FOUND", np.argmin(trows), np.min(trows), y)
-
-    row = longest_near(y, MARGIN, horizontal, 1)
-    print("NEAREST-T", row)
-    if row is not None:
-      self.l_gate[1] = int(row[1])
-
-    right = self.b_gate[2]
-    top = self.b_gate[1]
-    if not right:
-      right = self.l_gate[2]
-    if not top:
-      top = self.l_gate[1]
-    if not right or not top:
-      print("ABORT")
-      print(self.b_gate, "\n", self.l_gate, "\n", guess, "\n", self.prev_bounds)
-      return None
-    if self.prev_bounds is not None:
-      height = self.prev_bounds.height
-    elif guess is not None:
-      height = guess.height
-    else:
-      height = frame.shape[0] - MARGIN * 2 - top
-    y = top + height
-    if guess is not None:
-      y = guess.y2
-    if y > top + height:
-      y = int(top + height)
-    if y >= frame.shape[0]:
-      y = frame.shape[0] - MARGIN - 1
-    re = np.where(rows[y - MARGIN:] < BLACK_LEVEL)
-    if len(re[0]):
-      self.b_gate[3] = np.min(re) + y - MARGIN
-    else:
-      trows = rows[y - MARGIN:]
-      mrow = np.argmin(trows) + y - MARGIN
-      print("BOTTOM NOT FOUND", mrow, np.min(trows), y)
-
-    row = longest_near(y, MARGIN, horizontal, 1)
-    print("NEAREST-B", y, row)
-    if row is not None:
-      self.l_gate[3] = int(row[1])
-
-    if self.b_gate[2] is not None and self.b_gate[0] is not None:
-      width = self.b_gate[2] - self.b_gate[0]
-      height = (width / sp.FRAME_SUPER8[0]) * sp.FRAME_SUPER8[1]
-      if self.b_gate[1] is not None:
-        self.b_gate[7] = int(self.b_gate[1] + height)
-      if self.b_gate[3] is not None:
-        self.b_gate[5] = int(self.b_gate[3] - height)
-
-    if self.b_gate[3] is not None and self.b_gate[1] is not None:
-      height = self.b_gate[3] - self.b_gate[1]
-      width = (height / sp.FRAME_SUPER8[1]) * sp.FRAME_SUPER8[0]
-      if self.b_gate[0] is not None:
-        self.b_gate[6] = int(self.b_gate[0] + width)
-      if self.b_gate[2] is not None:
-        self.b_gate[4] = int(self.b_gate[2] - width)
-
-    if self.l_gate[2] is not None and self.l_gate[0] is not None:
-      width = self.l_gate[2] - self.l_gate[0]
-      height = (width / sp.FRAME_SUPER8[0]) * sp.FRAME_SUPER8[1]
-      if self.l_gate[1] is not None:
-        self.l_gate[7] = int(self.l_gate[1] + height)
-      if self.l_gate[3] is not None:
-        self.l_gate[5] = int(self.l_gate[3] - height)
-
-    if self.l_gate[3] is not None and self.l_gate[1] is not None:
-      height = self.l_gate[3] - self.l_gate[1]
-      width = (height / sp.FRAME_SUPER8[1]) * sp.FRAME_SUPER8[0]
-      if self.l_gate[0] is not None:
-        self.l_gate[6] = int(self.l_gate[0] + width)
-      if self.l_gate[2] is not None:
-        self.l_gate[4] = int(self.l_gate[2] - width)
-
-    best = np.array(self.b_gate)
-    missing = np.where(best == None)
-    if len(missing[0]):
-      best[missing] = np.array(self.l_gate)[missing]
-    if None in best[:4]:
-      print("TOO MUCH MISSING")
-      print(best, "\n", self.b_gate, "\n", self.l_gate, "\n", guess, "\n", self.prev_bounds)
-      return None
-
-    if best[1] is not None and best[2] is not None \
-       and best[3] is not None and best[7] is not None:
-      height = best[3] - best[1]
-      w1 = best[2] - (height / sp.FRAME_SUPER8[1]) * sp.FRAME_SUPER8[0]
-      height = best[7] - best[1]
-      w2 = best[2] - (height / sp.FRAME_SUPER8[1]) * sp.FRAME_SUPER8[0]
-      print("WIDTH", w1, w2)
-
-    center = 0
-    if sprocket.found and best[1] is not None and best[3] is not None:
-      g_center = guess.height / 2
-      f_center = (best[1] + best[3]) / 2
-      center = abs(f_center - g_center)
-      print("CENTER", center)
-
-    if None not in self.b_gate[:4] and None not in self.l_gate[:4] \
-       and abs(self.b_gate[1] - self.l_gate[1]) < MARGIN / 2 \
-       and abs(self.b_gate[2] - self.l_gate[2]) < MARGIN / 2 \
-       and (abs(self.b_gate[3] - self.l_gate[3]) > MARGIN / 2 \
-            or abs(best[3] - best[7]) > MARGIN / 2) \
-       and (abs(self.b_gate[7] - self.l_gate[7]) > 5 or center > MARGIN / 2):
-      print("BAD HEIGHT")
-      best[3] = best[7]
-
-    altw = alth = prvw = prvh = 0
-    if self.prev_bounds is not None:
-      prvw = self.prev_bounds.width
-      prvh = self.prev_bounds.height
-    curw = best[2] - best[0]
-    curh = best[3] - best[1]
-    aspw = (curh / sp.FRAME_SUPER8[1]) * sp.FRAME_SUPER8[0]
-    asph = (curw / sp.FRAME_SUPER8[0]) * sp.FRAME_SUPER8[1]
-    if self.l_gate[0] is not None and self.l_gate[2] is not None:
-      altw = self.l_gate[2] - self.l_gate[0]
-    if self.l_gate[1] is not None and self.l_gate[3] is not None:
-      alth = self.l_gate[3] - self.l_gate[1]
-    if prvw and abs(altw - prvw) < 5:
-      best[2] = self.l_gate[2]
-      curw = best[2] - best[0]
-      asph = (curw / sp.FRAME_SUPER8[0]) * sp.FRAME_SUPER8[1]
-    if prvh and alth and (abs(alth - prvh) < 5 or prvh - curh > MARGIN / 2):
-      best[3] = self.l_gate[3]
-      curh = best[3] - best[1]
-      aspw = (curh / sp.FRAME_SUPER8[1]) * sp.FRAME_SUPER8[0]
-    print("ASPECT", prvw, prvh, curw, curh, aspw, asph, altw, alth)
-
-    print("BOUNDS")
-    print(best, "\n", self.b_gate, "\n", self.l_gate, "\n", guess, "\n", self.prev_bounds)
-    if (not sprocket.found or abs(sprocket.bounds.height - spr_size) > 5) \
-       and abs(curw - prvw) > 5 and abs(aspw - prvw) > MARGIN \
-       and abs(curw - aspw) > MARGIN:
-      print("MOVE LEFT")
-      best[0] = int(best[2] - width)
-    else:
-      if self.b_gate[2] is not None and self.l_gate[2] is not None \
-         and (abs(self.b_gate[2] - self.l_gate[2]) <= 5 or abs(curw - prvw) <= 5 \
-              or (self.b_gate[1] is not None and self.prev_bounds is not None \
-                  and abs(self.b_gate[1] - self.prev_bounds.y1) < 5)) \
-         and best[1] + asph < frame.shape[0]:
-        print("MOVE BOTTOM")
-        best[3] = int(best[1] + asph)
-      elif abs(asph - curh) < abs(aspw - curw):
-        print("MOVE TOP")
-        best[1] = int(best[3] - asph)
-      else:
-        print("MOVE RIGHT", curw, aspw, curh, asph)
-        best[2] = int(best[0] + aspw)
-    print("FINAL\n", best)
-    self.best = best
-    return
-
-  @property
-  def bounds(self):
-    if self.found:
-      return line.Bounds(self.best[:2], br=self.best[2:4])
-    else:
-      return self.prev_bounds
-    return None
+    cv2.namedWindow("blob", cv2.WINDOW_NORMAL)
+    gray = frame
+    if len(gray.shape) == 3:
+      gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    bottom = 0
+    top = frame.shape[0] - 1
+    alt_top = alt_bottom = None
+    STEPS = 8
+    MARGIN = 10
+    for step in range(STEPS - 2):
+      thresh = 255 / STEPS * (step + 1)
+      print("THRESHOLD", thresh)
+      _, binary = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY)
+      binary_bgr = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+      cv2.line(binary_bgr, (0, self.bounds.y1), (binary_bgr.shape[1], self.bounds.y1),
+               CLR_YELLOW, 5)
+      cv2.line(binary_bgr, (0, self.bounds.y2), (binary_bgr.shape[1], self.bounds.y2),
+               CLR_YELLOW, 5)
       
-  @property
-  def found(self):
-    return self.best is not None
+      contours,_ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+      for c in contours:
+        b_rect = cv2.boundingRect(c)
+        rect = Bounds(b_rect)
+        if rect.width < 20 or rect.height < 20:
+          continue
+        useRect = False
+        if rect.y1 >= self.bounds.y1 - MARGIN and rect.y2 <= self.bounds.y2 + MARGIN \
+           and rect.y2 > self.bounds.y1 + MARGIN * 4:
+          print("GOOD RECT", self.bounds, rect)
+          if rect.y1 < top:
+            top = rect.y1
+          if rect.y2 > bottom:
+            bottom = rect.y2
+          cv2.rectangle(binary_bgr, *rect.cv, CLR_RED, 5)
+        elif rect.y1 >= self.bounds.y2 - MARGIN and rect.y2 == frame.shape[0]:
+          if alt_bottom is None or rect.y1 < alt_bottom:
+            alt_bottom = rect.y1
+          print("BOTTOM FRAME", alt_bottom, rect)  
+          cv2.rectangle(binary_bgr, *rect.cv, CLR_GREEN, 5)
+        elif rect.y1 == 0 and rect.y2 <= self.bounds.y1 + MARGIN:
+          if alt_top is None or rect.y2 > alt_top:
+            alt_top = rect.y2
+          print("TOP FRAME", alt_top, rect)  
+          cv2.rectangle(binary_bgr, *rect.cv, CLR_GREEN, 5)
+        else:
+          print("BAD RECT", top, bottom, rect)
+          print(rect.y1 >= self.bounds.y1 - MARGIN,
+                rect.y1 < top,
+                rect.y2 <= self.bounds.y2 + MARGIN,
+                rect.y2 > bottom)
+          cv2.rectangle(binary_bgr, *rect.cv, CLR_BLUE, 5)
 
-  @property
-  def stats(self):
-    a = [None, None, None, None]
-    if self.found:
-      a = list(self.best[:4])
-    a += self.b_gate[:4]
-    a += self.l_gate[:4]
-    return a
+      #cv2.drawContours(binary, contours, -1, 127, 5)
+      cv2.imshow("blob", binary_bgr)
+      cv2.waitKey(1)
+
+    print("BLOB TOP BOT", top, bottom, alt_bottom, alt_top,
+          abs(top - self.bounds.y1), abs(bottom - self.bounds.y2),
+          abs(alt_top - self.bounds.y1) if alt_top is not None else None,
+          abs(alt_bottom - self.bounds.y2) if alt_bottom is not None else None)
+    if alt_top is not None and alt_top > top:
+      top = alt_top
+    if alt_bottom is not None and alt_bottom > bottom:
+      bottom = alt_bottom
+
+    if abs(top - self.bounds.y1) < MARGIN * 4 \
+       and abs(bottom - self.bounds.y2) < MARGIN * 4:
+      self.bounds = Bounds((self.bounds.x1, top), br=(self.bounds.x2, bottom))
+      print("NEW BOUNDS", self.bounds)
+    return
+
+  @staticmethod
+  def best_row(rows, val, margin):
+    if len(rows):
+      idx = (np.abs(rows - val)).argmin()
+      best = rows[idx]
+      # print("BEST", best)
+      if abs(best - val) < margin:
+        val = best
+    return val
+
+  @staticmethod
+  def get_peaks(rows, margin):
+    v_max = np.max(rows)
+    v_max2 = v_max - margin
+    w = np.where(rows < v_max - margin)
+    if len(w[0]):
+      v_max2 = np.max(rows[w])
+    peaks, _ = find_peaks(rows, v_max2 - margin)
+    if not len(peaks):
+      peaks = np.where(rows == v_max)[0]
+    return peaks

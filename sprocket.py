@@ -1,32 +1,51 @@
 import line
 import cv2
 import numpy as np
-
-# Dimensions in mm
-SPROCKET_SUPER8 = (0.914, 1.09)
-FRAME_SUPER8 = (5.77, 4.01)
-SPROCKET_8MM = ()
-FRAME_8MM = (4.5, 3.3)
+from color import *
 
 class Sprocket:
+  # Dimensions in mm
+  SPROCKET_SUPER8 = (0.914, 1.09)
+  FRAME_SUPER8 = (5.77, 4.10)
+  SPROCKET_8MM = ()
+  FRAME_8MM = (4.5, 3.3)
+
   def __init__(self, frame):
     self.top = self.right = self.bottom = None
-    self.frameSize = line.Size(frame.shape[1::-1])
-    
-    v_center = int(frame.shape[0] / 2)
-    frame_f = frame.copy()
-    h, w = frame.shape[:2]
-    mask = np.zeros((h + 2, w + 2), np.uint8)
-    cv2.floodFill(frame_f, mask, (0, v_center), 255, loDiff=2, upDiff=2);
-    sprocket_c = mask[1:-1, 1:-1] * 255
-    sprocket_c = cv2.Canny(sprocket_c, 50, 100, apertureSize=3)
 
-    lines1 = cv2.HoughLinesP(sprocket_c, 2, np.pi/180, threshold=10,
-                             minLineLength=5, maxLineGap=5)
-    spr_h, spr_v = line.linify(lines1, None, 5)
+    if frame is not None:
+      self.frameSize = line.Size(frame.shape[1::-1])
 
-    if spr_h is not None and spr_v is not None:
-      self.find_sprocket(frame.shape[1::-1], spr_h, spr_v)
+      v_center = int(self.frameSize.height / 2)
+      frame_f = frame.copy()
+      mask = np.zeros((self.frameSize.height + 2, self.frameSize.width + 2), np.uint8)
+      dist = (2,)
+      if len(frame.shape) == 3:
+        dist = dist * frame.shape[2]
+      cv2.floodFill(frame_f, mask, (0, v_center), 255, loDiff=dist, upDiff=dist)
+      sprocket_c = mask[1:-1, 1:-1] * 255
+      lcheck = frame & np.stack((sprocket_c,)*3, axis=-1)
+      sprocket_c = cv2.Canny(sprocket_c, 50, 100, apertureSize=3)
+
+      lines1 = cv2.HoughLinesP(sprocket_c, 2, np.pi/180, threshold=10,
+                               minLineLength=5, maxLineGap=5)
+      spr_h, spr_v = line.linify(lines1, None, 5)
+
+      if spr_h is not None and spr_v is not None:
+        self.find_sprocket(frame.shape[1::-1], spr_h, spr_v)
+
+      if self.top:
+        cv2.line(lcheck, (0, self.top), (frame.shape[1], self.top), CLR_YELLOW, 5)
+      if self.bottom:
+        cv2.line(lcheck, (0, self.bottom), (frame.shape[1], self.bottom),
+                 CLR_YELLOW, 5)
+      if self.right:
+        cv2.line(lcheck, (self.right, 0), (self.right, frame.shape[0]),
+                 CLR_YELLOW, 5)
+
+      cv2.namedWindow("sprocket", cv2.WINDOW_NORMAL)
+      cv2.imshow("sprocket", lcheck)
+      
     return
 
   def find_sprocket(self, size, horizontal, vertical):
@@ -91,6 +110,21 @@ class Sprocket:
       return line.Bounds((0, self.top), br=(self.right, self.bottom))
     return None
 
+  @property
+  def gateBounds(self):
+    bounds = self.bounds
+    if bounds:
+      x1 = bounds.x2
+      mm_scale = bounds.height / self.SPROCKET_SUPER8[1]
+      v_center = int(bounds.height / 2 + bounds.y1)
+      gate_height = int(self.FRAME_SUPER8[1] * mm_scale)
+      y1 = int(v_center - gate_height / 2)
+      y2 = y1 + gate_height
+      aspect = self.FRAME_SUPER8[0] / self.FRAME_SUPER8[1]
+      x2 = int(x1 + (y2 - y1) * aspect)
+      return line.Bounds((x1, y1), br=(x2, y2))
+    return None
+      
   @property
   def guess(self):
     if not self.found:

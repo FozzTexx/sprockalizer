@@ -41,6 +41,9 @@ class Point:
   def midpoint(self, other):
     return Point((self.x + (other.x - self.x) / 2, self.y + (other.y - self.y) / 2))
 
+  def __repr__(self):
+    return "%s: (%0.3f, %0.3f)" % (self.__class__.__name__, *self.point[:2])
+  
 class Size:
   def __init__(self, size, height=None):
     if isinstance(size, list) or isinstance(size, tuple):
@@ -71,6 +74,9 @@ class Size:
     self.size = (self.size[0], val)
     return
 
+  def __repr__(self):
+    return "%s: (%0.3f, %0.3f)" % (self.__class__.__name__, *self.size[:2])
+  
 class Line:
   def __init__(self, x1, y1=None, x2=None, y2=None):
     if isarray(x1):
@@ -144,17 +150,15 @@ class Bounds:
         self.origin = Point(origin)
       else:
         self.origin = origin
-      if not size is None:
+      if size is not None:
         if isarray(size):
           self.size = Size(size)
         else:
           self.size = size
-      elif not br is None:
+      elif br is not None:
         if isarray(br):
-          pt = Point(br)
-          self.size = Size(pt.x - self.origin.x + 1, pt.y - self.origin.y + 1)
-        else:
-          self.size = size
+          br = Point(br)
+        self.size = Size(br.x - self.origin.x, br.y - self.origin.y)
     return
 
   @property
@@ -193,20 +197,20 @@ class Bounds:
   
   @property
   def x2(self):
-    return self.origin.x + self.size.width - 1
+    return self.origin.x + self.size.width
 
   @x2.setter
   def x2(self, val):
-    self.size.width = self.origin.x + val + 1
+    self.size.width = self.origin.x + val
     return
   
   @property
   def y2(self):
-    return self.origin.y + self.size.height - 1
+    return self.origin.y + self.size.height
 
   @y2.setter
   def y2(self, val):
-    self.size.height = self.origin.y + val + 1
+    self.size.height = self.origin.y + val
     return
   
   @property
@@ -247,8 +251,8 @@ class Bounds:
     return None
 
   def __repr__(self):
-    a = self.cv
-    return "[%s, %s, %s, %s]" % (a[0][0], a[0][1], a[1][0], a[1][1])
+    return "%s: ((%i, %i), (%i, %i))" % (self.__class__.__name__,
+                                         self.x1, self.y1, self.x2, self.y2)
 
 def line_angle(line):
   return math.atan2(line[0][1] - line[1][1], line[0][0] - line[1][0])

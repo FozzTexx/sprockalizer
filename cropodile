@@ -3,6 +3,7 @@ import argparse
 import os
 import cv2
 import numpy as np
+import json
 from line import Bounds
 
 def build_argparser():
@@ -29,7 +30,15 @@ def cropFile(source, margin, fps):
   base, ext = os.path.splitext(source)
 
   path = base + ".crops"
-  crops = np.loadtxt(path, dtype=np.int32)
+  with open(path, "r") as f:
+    crops = []
+    while True:
+      jdata = f.readline()
+      if not jdata:
+        break
+      jdata = json.loads(jdata)
+      crops.append(jdata)
+  crops = np.array(crops)
 
   path = base + "-crop.mp4"
   four_cc = cv2.VideoWriter_fourcc(*"MP4V")
