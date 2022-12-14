@@ -41,7 +41,7 @@ def cropFile(source, margin, fps):
   crops = np.array(crops)
 
   path = base + "-crop.mp4"
-  four_cc = cv2.VideoWriter_fourcc(*"MP4V")
+  four_cc = cv2.VideoWriter_fourcc(*"mp4v")
   size = Bounds(crops[0, 1:3], br=crops[0, 3:5]).size
   size.width -= margin * 2
   size.height -= margin * 2

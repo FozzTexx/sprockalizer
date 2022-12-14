@@ -1,4 +1,3 @@
-import sprocket as sp
 from line import Bounds
 import cv2
 from scipy import stats
@@ -45,12 +44,10 @@ class Gate:
     g_rows = 1 - (rows / (w * 255))
     g_cols = 1 - (cols / (h * 255))
 
-    mm_scale = est_top = est_bot = gate_height = None
+    est_top = est_bot = gate_height = None
     if sprocket.top and sprocket.bottom:
-      spr_height = sprocket.bottom - sprocket.top
-      mm_scale = spr_height / sprocket.SPROCKET_SUPER8[1]
-      v_center = int(spr_height / 2 + sprocket.top)
-      gate_height = sprocket.FRAME_SUPER8[1] * mm_scale
+      v_center = int(sprocket.height / 2 + sprocket.top)
+      gate_height = sprocket.standard.frame.height * sprocket.mm_scale
       est_top = v_center - gate_height / 2
       est_bot = est_top + gate_height
       if est_bot >= frame.shape[0]:
@@ -62,13 +59,13 @@ class Gate:
       top_rows = g_rows[t_offset:t_offset + self.MARGIN * 2]
       bot_rows = g_rows[b_offset:b_offset + self.MARGIN * 2]
 
-      cv2.line(frame, (0, int(est_top)), (frame.shape[1], int(est_top)), CLR_LBLUE, 5)
-      cv2.line(frame, (0, int(est_top + gate_height)),
-               (frame.shape[1], int(est_top + gate_height)), CLR_LBLUE, 5)
+      # cv2.line(frame, (0, int(est_top)), (frame.shape[1], int(est_top)), CLR_LBLUE, 5)
+      # cv2.line(frame, (0, int(est_top + gate_height)),
+      #          (frame.shape[1], int(est_top + gate_height)), CLR_LBLUE, 5)
 
       print("ESTIMATED",
-            "sprock:", spr_height,
-            "mm:", mm_scale,
+            "sprock:", sprocket.height,
+            "mm:", sprocket.mm_scale,
             "gate:", gate_height,
             "top:", est_top)
     else:
@@ -103,9 +100,7 @@ class Gate:
     y1 = est_top
     y2 = est_bot
     if x1 is not None and y1 is not None and y2 is not None:
-      aspect = sprocket.FRAME_SUPER8[0] / sprocket.FRAME_SUPER8[1]
-      x2 = int(x1 + (y2 - y1) * aspect)
-
+      x2 = int(x1 + sprocket.standard.frame.width * sprocket.mm_scale)
       if x2 < frame.shape[1]:
         r_offset = x2 - 20
         rgt_cols = g_cols[r_offset:]
@@ -122,10 +117,10 @@ class Gate:
         self.bounds = Bounds((int(x1), int(y1)), br=(int(x2), int(y2)))
         # print("GATE", self.bounds)
 
-        cv2.line(frame, (0, int(y1)), (frame.shape[1], int(y1)), CLR_GREEN, 5)
-        cv2.line(frame, (0, int(y2)), (frame.shape[1], int(y2)), CLR_GREEN, 5)
-        cv2.line(frame, (x1, 0), (x1, frame.shape[0]), CLR_GREEN, 5)
-        cv2.line(frame, (x2, 0), (x2, frame.shape[0]), CLR_GREEN, 5)
+        # cv2.line(frame, (0, int(y1)), (frame.shape[1], int(y1)), CLR_GREEN, 5)
+        # cv2.line(frame, (0, int(y2)), (frame.shape[1], int(y2)), CLR_GREEN, 5)
+        # cv2.line(frame, (x1, 0), (x1, frame.shape[0]), CLR_GREEN, 5)
+        # cv2.line(frame, (x2, 0), (x2, frame.shape[0]), CLR_GREEN, 5)
 
     #   else:
     #     print("OUT OF FRAME", x2)
@@ -134,7 +129,27 @@ class Gate:
     #   print(tpeaks)
     #   print(bpeaks)
 
-    self.blobify(original)
+    if self.bounds:
+      top, bottom, right = self.blobify(original, sprocket)
+      print("BLOB", top, bottom, right)
+
+      MARGIN = 20
+      PEAK_MARGIN = 0.1
+      est_top = self.estimate(top, MARGIN, PEAK_MARGIN, g_rows)
+      est_bot = self.estimate(bottom, MARGIN, PEAK_MARGIN, g_rows)
+      est_rgt = self.estimate(right, MARGIN, PEAK_MARGIN, g_cols)
+      
+      if (abs(top - self.bounds.y1) < MARGIN * 4 or est_top) \
+         and (abs(bottom - self.bounds.y2) < MARGIN * 4 or est_bot):
+        if abs(right - self.bounds.x2) > MARGIN * 4 and est_rgt is None:
+          print("NO RIGHT", right, self.bounds.x2, abs(right - self.bounds.x2))
+          right = self.bounds.x2
+        print("BLOB2", top, bottom, right)
+        # FIXME - do something about left/x1?
+        self.bounds = Bounds((self.bounds.x1, top), br=(right, bottom))
+        print("NEW BOUNDS", self.bounds.topLeft, self.bounds.bottomRight)
+      else:
+        print("BLOB FAIL", abs(top - self.bounds.y1), abs(bottom - self.bounds.y2))
 
     lcheck = np.ones(shape=frame.shape, dtype=np.uint8)
     lcheck *= 255
@@ -144,9 +159,9 @@ class Gate:
     for y, v in enumerate(bot_rows):
       x = int(v * lcheck.shape[1])
       cv2.line(lcheck, (0, y + b_offset), (x, y + b_offset), 0, 5)
-    if est_top and est_bot:
-      cv2.line(lcheck, (0, int(est_top)), (lcheck.shape[1], int(est_top)), CLR_LBLUE, 5)
-      cv2.line(lcheck, (0, int(est_bot)), (lcheck.shape[1], int(est_bot)), CLR_LBLUE, 5)
+    # if est_top and est_bot:
+    #   cv2.line(lcheck, (0, int(est_top)), (lcheck.shape[1], int(est_top)), CLR_LBLUE, 5)
+    #   cv2.line(lcheck, (0, int(est_bot)), (lcheck.shape[1], int(est_bot)), CLR_LBLUE, 5)
 
     cv2.imshow("3", lcheck)
 
@@ -159,16 +174,13 @@ class Gate:
 
     return
 
-  def blobify(self, frame):
-    if not self.bounds:
-      return
-
-    cv2.namedWindow("blob", cv2.WINDOW_NORMAL)
+  def blobify(self, frame, sprocket):
     gray = frame
     if len(gray.shape) == 3:
       gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     bottom = 0
     top = frame.shape[0] - 1
+    right = 0
     alt_top = alt_bottom = None
     STEPS = 8
     MARGIN = 10
@@ -182,20 +194,26 @@ class Gate:
       cv2.line(binary_bgr, (0, self.bounds.y2), (binary_bgr.shape[1], self.bounds.y2),
                CLR_YELLOW, 5)
       
-      contours,_ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+      contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
       for c in contours:
-        b_rect = cv2.boundingRect(c)
-        rect = Bounds(b_rect)
-        if rect.width < 20 or rect.height < 20:
+        rect = Bounds(cv2.boundingRect(c))
+        if rect.width < 100 or rect.height < 100:
           continue
         useRect = False
         if rect.y1 >= self.bounds.y1 - MARGIN and rect.y2 <= self.bounds.y2 + MARGIN \
-           and rect.y2 > self.bounds.y1 + MARGIN * 4:
-          print("GOOD RECT", self.bounds, rect)
+           and rect.y2 > self.bounds.y1 + MARGIN * 4 and rect.x2 < frame.shape[1] - 15:
+          print("GOOD RECT", frame.shape[1], rect.x2, self.bounds, rect)
           if rect.y1 < top:
             top = rect.y1
           if rect.y2 > bottom:
             bottom = rect.y2
+          r_edge = self.bounds.x1 + sprocket.mm_scale * sprocket.standard.frame.width
+          if rect.x2 > right and abs(rect.x2 - r_edge) < MARGIN * 2:
+            print("GOOD RIGHT", rect.x2, self.bounds.x2)
+            right = rect.x2
+          else:
+            print("BAD RIGHT", right, rect.x2, r_edge, self.bounds.x2,
+                  rect.x2 > right, rect.x2 < r_edge + MARGIN)
           cv2.rectangle(binary_bgr, *rect.cv, CLR_RED, 5)
         elif rect.y1 >= self.bounds.y2 - MARGIN and rect.y2 == frame.shape[0]:
           if alt_bottom is None or rect.y1 < alt_bottom:
@@ -216,10 +234,11 @@ class Gate:
           cv2.rectangle(binary_bgr, *rect.cv, CLR_BLUE, 5)
 
       #cv2.drawContours(binary, contours, -1, 127, 5)
-      cv2.imshow("blob", binary_bgr)
-      cv2.waitKey(1)
+      # cv2.namedWindow("blob", cv2.WINDOW_NORMAL)
+      # cv2.imshow("blob", binary_bgr)
+      # cv2.waitKey(0)
 
-    print("BLOB TOP BOT", top, bottom, alt_bottom, alt_top,
+    print("BLOB TOP BOT", top, bottom, right, alt_bottom, alt_top,
           abs(top - self.bounds.y1), abs(bottom - self.bounds.y2),
           abs(alt_top - self.bounds.y1) if alt_top is not None else None,
           abs(alt_bottom - self.bounds.y2) if alt_bottom is not None else None)
@@ -228,20 +247,28 @@ class Gate:
     if alt_bottom is not None and alt_bottom > bottom:
       bottom = alt_bottom
 
-    if abs(top - self.bounds.y1) < MARGIN * 4 \
-       and abs(bottom - self.bounds.y2) < MARGIN * 4:
-      self.bounds = Bounds((self.bounds.x1, top), br=(self.bounds.x2, bottom))
-      print("NEW BOUNDS", self.bounds)
-    return
+    # if abs(top - self.bounds.y1) < MARGIN * 4 \
+    #    and abs(bottom - self.bounds.y2) < MARGIN * 4:
+    #   if abs(right - self.bounds.x2) > MARGIN * 4:
+    #     print("NO RIGHT", right, self.bounds.x2, abs(right - self.bounds.x2))
+    #     right = self.bounds.x2
+    #   # FIXME - do something about left/x1?
+    #   self.bounds = Bounds((self.bounds.x1, top), br=(right, bottom))
+    #   print("NEW BOUNDS", self.bounds)
+    # else:
+    #   print("BLOB FAIL", abs(top - self.bounds.y1), abs(bottom - self.bounds.y2))
+    return top, bottom, right
 
   @staticmethod
-  def best_row(rows, val, margin):
+  def best_row(rows, val, margin, canFail=False):
     if len(rows):
       idx = (np.abs(rows - val)).argmin()
       best = rows[idx]
       # print("BEST", best)
-      if abs(best - val) < margin:
+      if abs(best - val) <= margin:
         val = best
+      elif canFail:
+        val = None
     return val
 
   @staticmethod
@@ -255,3 +282,14 @@ class Gate:
     if not len(peaks):
       peaks = np.where(rows == v_max)[0]
     return peaks
+
+  def estimate(self, position, margin, peak_margin, rows):
+    est = None
+    offset = int(position - margin)
+    section = rows[offset:offset + margin * 2]
+    if len(section):
+      peaks = self.get_peaks(section, peak_margin)
+      if len(peaks):
+        peaks += offset
+        est = self.best_row(peaks, position, margin / 2, canFail=True)
+    return est

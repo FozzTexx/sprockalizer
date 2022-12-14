@@ -252,7 +252,7 @@ class Bounds:
 
   def __repr__(self):
     return "%s: ((%i, %i), (%i, %i))" % (self.__class__.__name__,
-                                         self.x1, self.y1, self.x2, self.y2)
+                                         self.x1, self.y1, self.width, self.height)
 
 def line_angle(line):
   return math.atan2(line[0][1] - line[1][1], line[0][0] - line[1][0])
