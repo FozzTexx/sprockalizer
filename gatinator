@@ -9,12 +9,15 @@ import numpy as np
 import json
 from sprocket import Sprocket
 from scipy import stats
+import matplotlib.pyplot as plt
 from gate import Gate
 from line import Point, Size, Bounds
 from color import *
 
 import warnings
 warnings.simplefilter('ignore', np.RankWarning)
+
+GATE_MARGIN = 40
 
 def build_argparser():
   parser = argparse.ArgumentParser()
@@ -23,11 +26,11 @@ def build_argparser():
   parser.add_argument("--mode", default="super8", choices=["super8", "8mm"],
                       help="type of film")
   parser.add_argument("--start", default=0, type=int, help="frame number to start at")
-  parser.add_argument("--end", default=-1, type=int, help="frame number to stop at")
+  parser.add_argument("--limit", type=int, help="max number of frames to process")
   parser.add_argument("--nowait", action="store_true", help="don't wait for keypress to start")
   return parser
 
-def pass1(movie, name, start, mode, nowait):
+def pass1(movie, name, start, limit, mode, nowait):
   ret = movie.set(cv2.CAP_PROP_POS_FRAMES, start)
 
   cv2.namedWindow(name, cv2.WINDOW_NORMAL)
@@ -40,6 +43,8 @@ def pass1(movie, name, start, mode, nowait):
 
   sprockets = []
   while True:
+    if limit is not None and frame_num == start + limit:
+      break
     ret, frame = movie.read()
     if not ret:
       break
@@ -51,9 +56,7 @@ def pass1(movie, name, start, mode, nowait):
     sprocket = Sprocket(frame, mode)
     sprockets.append(sprocket)
     if not sprocket.found:
-      singleStep = True
-      if nowait:
-        break
+      singleStep = singleStep or not nowait
     else:
       if search_res is None:
         search_res = Size(int(sprocket.standard.frame.width * sprocket.mm_scale),
@@ -61,10 +64,14 @@ def pass1(movie, name, start, mode, nowait):
 
       y = sprocket.bounds.y1 + sprocket.bounds.height / 2
       y -= search_res.height / 2
-      crop_bounds = Bounds((sprocket.bounds.x2, int(y)), search_res)
-      if crop_bounds.x1 >= 0 and crop_bounds.y1 >= 0 \
-         and crop_bounds.width > 0 and crop_bounds.height > 0:
-        crop = frame[crop_bounds.y1:crop_bounds.y2, crop_bounds.x1:, :]
+      crop_bounds = Bounds((sprocket.bounds.x2, int(y) - GATE_MARGIN),
+                           (search_res.width, search_res.height + GATE_MARGIN * 2))
+      if crop_bounds.x2 > 0 and crop_bounds.y2 > 0:
+        crop = frame[max(0, crop_bounds.y1):crop_bounds.y2, max(0, crop_bounds.x1):, :]
+        if crop_bounds.x1 < 0 or crop_bounds.y1 < 0:
+          left_pad = abs(crop_bounds.x1)
+          top_pad = abs(crop_bounds.y1)
+          crop = cv2.copyMakeBorder(crop, top_pad, 0, left_pad, 0, cv2.BORDER_CONSTANT, 0)
         if is_bright(crop, thresh=0.4):
           crop = crop / 255
           if edge_search is None:
@@ -114,19 +121,14 @@ def pass1(movie, name, start, mode, nowait):
   edge_search = edge_search * 255
   edge_search = edge_search.astype(np.uint8)
 
-  cv2.destroyAllWindows()
-  return sprockets, edge_search, search_res
-
-def pass2(movie, name, sprockets, mode, edge_search, search_res, start, nowait):
-  cv2.namedWindow("cropped", cv2.WINDOW_NORMAL)
-  cv2.namedWindow("sprocket", cv2.WINDOW_NORMAL)
-  singleStep = not nowait
-
   # Find brightest pixel
   gray = cv2.cvtColor(edge_search, cv2.COLOR_BGR2GRAY)
-  (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(gray[40:-40, 40:search_res.width - 80])
-  edge_search = adjust_brightness(edge_search, (minLoc[0] + 40, minLoc[1] + 40),
-                                  (maxLoc[0] + 40, maxLoc[1] + 40))
+  (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(gray[GATE_MARGIN:-GATE_MARGIN,
+                                                        GATE_MARGIN:search_res.width
+                                                        - GATE_MARGIN * 2])
+  edge_search = adjust_brightness(edge_search, (minLoc[0] + GATE_MARGIN,
+                                                minLoc[1] + GATE_MARGIN),
+                                  (maxLoc[0] + GATE_MARGIN, maxLoc[1] + GATE_MARGIN))
   
   # print(search_res, edge_search.shape[1::-1])
 
@@ -137,20 +139,26 @@ def pass2(movie, name, sprockets, mode, edge_search, search_res, start, nowait):
                        + [sprocket.bounds.width, sprocket.bounds.height, sprocket.mm_scale])
   stats = np.array(stats)
 
-  sprocket_height = get_mode(stats, 5)
+  spr_x = 0
+  spr_y = get_mode(stats, 1)
+  spr_w = get_mode(stats, 4)
+  spr_h = get_mode(stats, 5)
+  #spr_avg = Bounds((spr_x, spr_y), (spr_w, spr_h))
+  spr_avg = Bounds((0, np.mean(stats[:, 1])), (np.mean(stats[:, 4]), np.mean(stats[:, 5])))
 
   sprock = Sprocket(None, mode)
   edge_res = Size(edge_search.shape[1::-1])
-  sprock.top = edge_res.height / 2 - sprocket_height / 2
-  sprock.bottom = sprock.top + sprocket_height
+  sprock.top = edge_res.height / 2 - spr_avg.height / 2
+  sprock.bottom = sprock.top + spr_avg.height
   sprock.right = 0
   # print("MM SCALE", sprock.mm_scale, stats[0][6])
+
   rel_gate = Gate(edge_search, sprock)
   rel_bounds = Bounds((rel_gate.bounds.x1, sprock.top - rel_gate.bounds.y1),
                       rel_gate.bounds.size)
 
-  w = int(rel_gate.bounds.width / 4)
-  h = int(rel_gate.bounds.height / 4)
+  w = int(rel_bounds.width / 4)
+  h = int(rel_bounds.height / 4)
   cv2.line(edge_search, (search_res.width, 0), (search_res.width, edge_res.height),
            CLR_BLUE, 5)
   cv2.line(edge_search, (0, rel_gate.bounds.y1), (w, rel_gate.bounds.y1), CLR_GREEN, 5)
@@ -162,66 +170,152 @@ def pass2(movie, name, sprockets, mode, edge_search, search_res, start, nowait):
   cv2.line(edge_search, (rel_gate.bounds.x2, 0), (rel_gate.bounds.x2, h), CLR_GREEN, 5)
   cv2.line(edge_search, (rel_gate.bounds.x2, h * 3), (rel_gate.bounds.x2, edge_res.height),
            CLR_GREEN, 5)
+  cv2.namedWindow("cropped", cv2.WINDOW_NORMAL)
   cv2.imshow("cropped", edge_search)
-  cv2.waitKey(0)
+  cv2.waitKey(1 if nowait else 0)
+
+  cv2.destroyAllWindows()
+  return sprockets, spr_avg, edge_res, rel_bounds
+
+def pass2(movie, name, sprockets, spr_avg, mode, edge_res, start, nowait):
+  cv2.namedWindow("sprocket", cv2.WINDOW_NORMAL)
+  singleStep = not nowait
 
   for idx, sprocket in enumerate(sprockets):
     LIMIT = 10
-    prev_top = np.array([[x.right, x.top] for x in sprockets[idx - LIMIT:idx]])
-    prev_bot = np.array([[x.right, x.bottom] for x in sprockets[idx - LIMIT:idx]])
-    near_rgt = np.array([x.right for x in sprockets[idx - LIMIT:idx+LIMIT+1]])
-    est_top = est_bot = None
+    prev_top = np.array([[x, y.top] for x, y in enumerate(sprockets[idx - LIMIT:idx])])
+    prev_bot = np.array([[x, y.bottom] for x, y in enumerate(sprockets[idx - LIMIT:idx])])
+    prev_rgt = np.array([[x, y.right] for x, y in enumerate(sprockets[idx - LIMIT:idx])])
+    est_top = est_bot = est_rgt = None
 
-    if len(prev_top) >= 2 or sprocket.right is None:
-      qmin, qmax, remain = sprocket.discard_outliers(near_rgt)
-      avg_rgt = np.average([x for x in remain if qmin < x < qmax])
-      if sprocket.right is None \
-         or abs(sprocket.right - avg_rgt) > 10:
-        sprocket.right = avg_rgt
+    bad_top = abs(spr_avg.y1 - sprocket.top) > 10
+    bad_right = abs(spr_avg.x2 - sprocket.right) > 10
+    bad_height = not sprocket.bounds or abs(spr_avg.height - sprocket.bounds.height) > 15
+    if len(prev_top) >= LIMIT \
+       and ((bad_top and bad_height) or bad_right):
+
+      est_top = vector(len(prev_top), prev_top)
+      est_bot = vector(len(prev_bot), prev_bot)
+      est_rgt = vector(len(prev_rgt), prev_rgt)
+
+      print("BAD SPROCK", spr_avg.x2 - sprocket.right, spr_avg.y1 - sprocket.top,
+            spr_avg.height - sprocket.bounds.height if sprocket.bounds else None)
+      print("Bad", bad_right, bad_top, bad_height)
+      print("ESTIMATE  ", est_rgt, est_top, est_bot)
+      print("Average", spr_avg)
+      print("This", sprocket.bounds)
+
+      new_right = sprocket.right
+      new_top = sprocket.top
       
-      est_top = vector(sprocket.right, prev_top)
-      est_bot = vector(sprocket.right, prev_bot)
+      if bad_right:
+        # FIXME - run gate on frame, check right edge distance
+        qmin, qmax, remain = sprocket.discard_outliers([x[1] for x in prev_rgt])
+        avg_rgt = np.average([x for x in remain if qmin < x < qmax])
+        if np.isnan(avg_rgt):
+          avg_rgt = spr_avg.x2
+        print("BAD RIGHT", avg_rgt)
+        right1 = abs(sprocket.right - avg_rgt)
+        right2 = abs(sprocket.right - spr_avg.x2)
+        better_right = avg_rgt
+        if right2 < right1:
+          better_right = spr_avg.x2
+        if sprocket.right is None or abs(sprocket.right - better_right) > 10:
+          new_right = better_right
 
-    if sprocket.top is None:
-      if sprocket.bottom is None:
-        _, _, remain = sprocket.discard_outliers(prev_top[: 1])
-        sprocket.top = np.average(remain)
-      else:
-        sprocket.top = sprocket.bottom - sprocket_height
-
-    if len(prev_top) >= LIMIT:
-      top_avg = np.average(prev_top[:, 1])
-      if abs(sprocket.top - top_avg) > 10 and abs(sprocket.top - prev_top[-1, 1]) > 10 \
-         and (sprocket.bottom is None
-              or abs(sprocket.bounds.height - sprocket_height) > 10):
-        if est_bot is not None and sprocket.bottom is not None \
-           and abs(sprocket.bottom - est_bot) < 10:
-          new_top = sprocket.bottom - sprocket_height
+      if bad_top and bad_height:
+        print("BAD TOP", sprocket.bottom, est_bot)
+        if sprocket.bottom is not None \
+           and (abs(sprocket.bottom - est_bot) <= 10
+                or abs(sprocket.bottom - spr_avg.y2) <= 10) \
+           and abs(est_bot - spr_avg.y2) < 50:
+          new_top = sprocket.bottom - spr_avg.height
         else:
           new_top = est_top
-        
-        ret = movie.set(cv2.CAP_PROP_POS_FRAMES, idx+start)
-        ret, frame = movie.read()
-        cv2.line(frame, (0, int(new_top)), (frame.shape[1], int(new_top)),
-                 CLR_YELLOW, 5)
-        if sprocket.bottom is not None:
-          cv2.line(frame, (0, int(sprocket.bottom)), (frame.shape[1], int(sprocket.bottom)),
-                   CLR_YELLOW, 5)
-        cv2.line(frame, (0, int(new_top)), (frame.shape[1], int(new_top)),
-                 CLR_LBLUE, 5)
-        cv2.line(frame, (int(sprocket.right), 0), (int(sprocket.right), frame.shape[0]),
-                 CLR_YELLOW, 5)
-        cv2.imshow("sprocket", frame)
-        cv2.waitKey(1)
-        sprocket.top = new_top
-        sprocket.bottom = sprocket.top + sprocket_height
+          
+      # plt.clf()
+      # plt.scatter([x.right for x in sprockets[idx - LIMIT:idx]],
+      #             [x.top for x in sprockets[idx - LIMIT:idx]])
+      # plt.scatter([sprocket.right], [sprocket.top])
+      # plt.scatter([spr_avg.x2], [spr_avg.y1])
+      # #plt.waitforbuttonpress()
+      # plt.show(block=False)
+      # plt.pause(0.001)
+      #plt.show()
+      show_frame(movie, idx+start, sprocket, new_top, new_right)
+      if abs(new_top - sprocket.top) > 3:
+        cv2.waitKey(0)
 
-    if abs(sprocket.bounds.height - sprocket_height) > 10:
-      sprocket.bottom = sprocket.top + sprocket_height
+      sprocket_right = new_right
+      sprocket.top = new_top
+      sprocket.bottom = sprocket.top + spr_avg.height
+      
+    # if len(prev_top) >= 2 or sprocket.right is None:
+    #   qmin, qmax, remain = sprocket.discard_outliers([x[1] for x in prev_rgt])
+    #   avg_rgt = np.average([x for x in remain if qmin < x < qmax])
+    #   if sprocket.right is None \
+    #      or abs(sprocket.right - avg_rgt) > 10:
+    #     sprocket.right = avg_rgt
+      
+    #   est_top = vector(len(prev_top), prev_top)
+    #   est_bot = vector(len(prev_bot), prev_bot)
+    #   est_rgt = vector(len(prev_rgt), prev_rgt)
+
+    # if sprocket.top is None:
+    #   if sprocket.bottom is None:
+    #     _, _, remain = sprocket.discard_outliers(prev_top[: 1])
+    #     sprocket.top = np.average(remain)
+    #   else:
+    #     sprocket.top = sprocket.bottom - spr_avg.height
+
+    # if len(prev_top) >= LIMIT:
+    #   top_avg = np.average(prev_top[:, 1])
+    #   if abs(sprocket.top - top_avg) > 10 and abs(sprocket.top - prev_top[-1, 1]) > 10 \
+    #      and (sprocket.bottom is None
+    #           or abs(sprocket.bounds.height - spr_avg.height) > 10):
+    #     if est_bot is not None and sprocket.bottom is not None \
+    #        and abs(sprocket.bottom - est_bot) < 10:
+    #       new_top = sprocket.bottom - spr_avg.height
+    #     else:
+    #       new_top = est_top
+
+    #     show_frame(movie, idx+start, sprocket, new_top)
+    #     sprocket.top = new_top
+    #     sprocket.bottom = sprocket.top + spr_avg.height
+
+    # if abs(sprocket.bounds.height - spr_avg.height) > 10:
+    #   sprocket.bottom = sprocket.top + spr_avg.height
 
   cv2.destroyAllWindows()
-  return rel_bounds
+  return
 
+def show_frame(movie, frame_num, sprocket, new_top=None, new_right=None):
+  ret = movie.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+  ret, frame = movie.read()
+
+  label = "%i" % (frame_num)
+  cv2.putText(frame, label, (10, frame.shape[0] - 40),
+              cv2.FONT_HERSHEY_SIMPLEX, 5, (0,0,0), 15)
+  cv2.putText(frame, label, (10, frame.shape[0] - 40),
+              cv2.FONT_HERSHEY_SIMPLEX, 5, (255,255,255), 7)
+  
+  if new_top is not None:
+    cv2.line(frame, (0, int(new_top)), (frame.shape[1], int(new_top)), CLR_LBLUE, 5)
+  if new_right is not None:
+    cv2.line(frame, (int(new_right), 0), (int(new_right), frame.shape[0]),
+             CLR_LBLUE, 5)
+  if sprocket.top is not None:
+    cv2.line(frame, (0, int(sprocket.top)), (frame.shape[1], int(sprocket.top)), CLR_YELLOW, 5)
+  if sprocket.bottom is not None:
+    cv2.line(frame, (0, int(sprocket.bottom)), (frame.shape[1], int(sprocket.bottom)),
+             CLR_YELLOW, 5)
+  if sprocket.right is not None:
+    cv2.line(frame, (int(sprocket.right), 0), (int(sprocket.right), frame.shape[0]),
+             CLR_YELLOW, 5)
+  cv2.imshow("sprocket", frame)
+  cv2.waitKey(1)
+  return
+  
 def pass3(movie, name, sprockets, rel_bounds, start, nowait):
   cv2.namedWindow(name, cv2.WINDOW_NORMAL)
   cv2.namedWindow("cropped", cv2.WINDOW_NORMAL)
@@ -324,9 +418,10 @@ def main():
 
   # stats_path = base + ".stats"
 
-  sprockets, edge_search, search_res = pass1(movie, name, args.start, args.mode, args.nowait)
-  rel_bounds = pass2(movie, name, sprockets, args.mode,
-                     edge_search, search_res, args.start, args.nowait)
+  sprockets, spr_avg, edge_res, rel_bounds \
+    = pass1(movie, name, args.start, args.limit, args.mode, args.nowait)
+  # FIXME - write stats
+  pass2(movie, name, sprockets, spr_avg, args.mode, edge_res, args.start, args.nowait)
   #   with open(stats_path, "w") as f:
   #     for idx, sprocket in enumerate(sprockets):
   #       spr_bounds = np.array([sprocket.top, sprocket.bottom, sprocket.right]).tolist()
