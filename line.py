@@ -74,6 +74,10 @@ class Size:
     self.size = (self.size[0], val)
     return
 
+  @property
+  def aslist(self):
+    return [self.width, self.height]
+  
   def __repr__(self):
     return "%s: (%0.3f, %0.3f)" % (self.__class__.__name__, *self.size[:2])
   
@@ -239,7 +243,7 @@ class Bounds:
 
   @property
   def aslist(self):
-    return [self.x1, self.y1, self.x2, self.y2]
+    return [self.x1, self.y1, self.width, self.height]
   
   def intersection(self, aRect):
     x1 = max(self.x1, aRect.x1)

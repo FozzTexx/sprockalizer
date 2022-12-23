@@ -9,7 +9,7 @@ import numpy as np
 import json
 from sprocket import Sprocket
 from scipy import stats
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 from gate import Gate
 from line import Point, Size, Bounds
 from color import *
@@ -28,6 +28,7 @@ def build_argparser():
   parser.add_argument("--start", default=0, type=int, help="frame number to start at")
   parser.add_argument("--limit", type=int, help="max number of frames to process")
   parser.add_argument("--nowait", action="store_true", help="don't wait for keypress to start")
+  parser.add_argument("--pass1", action="store_true", help="only do first pass")
   return parser
 
 def pass1(movie, name, start, limit, mode, nowait):
@@ -129,21 +130,21 @@ def pass1(movie, name, start, limit, mode, nowait):
   edge_search = adjust_brightness(edge_search, (minLoc[0] + GATE_MARGIN,
                                                 minLoc[1] + GATE_MARGIN),
                                   (maxLoc[0] + GATE_MARGIN, maxLoc[1] + GATE_MARGIN))
-  
+
   # print(search_res, edge_search.shape[1::-1])
 
   stats = []
   for sprocket in sprockets:
     if sprocket.bounds:
-      stats.append(sprocket.bounds.aslist
-                       + [sprocket.bounds.width, sprocket.bounds.height, sprocket.mm_scale])
+      stats.append([sprocket.bounds.x1, sprocket.bounds.y1,
+                    sprocket.bounds.x2, sprocket.bounds.y2,
+                    sprocket.bounds.width, sprocket.bounds.height, sprocket.mm_scale])
   stats = np.array(stats)
 
   spr_x = 0
   spr_y = get_mode(stats, 1)
   spr_w = get_mode(stats, 4)
   spr_h = get_mode(stats, 5)
-  #spr_avg = Bounds((spr_x, spr_y), (spr_w, spr_h))
   spr_avg = Bounds((0, np.mean(stats[:, 1])), (np.mean(stats[:, 4]), np.mean(stats[:, 5])))
 
   sprock = Sprocket(None, mode)
@@ -181,6 +182,8 @@ def pass2(movie, name, sprockets, spr_avg, mode, edge_res, start, nowait):
   cv2.namedWindow("sprocket", cv2.WINDOW_NORMAL)
   singleStep = not nowait
 
+  vcenter_avg = spr_avg.y1 + spr_avg.height / 2
+
   for idx, sprocket in enumerate(sprockets):
     LIMIT = 10
     prev_top = np.array([[x, y.top] for x, y in enumerate(sprockets[idx - LIMIT:idx])])
@@ -188,9 +191,17 @@ def pass2(movie, name, sprockets, spr_avg, mode, edge_res, start, nowait):
     prev_rgt = np.array([[x, y.right] for x, y in enumerate(sprockets[idx - LIMIT:idx])])
     est_top = est_bot = est_rgt = None
 
-    bad_top = abs(spr_avg.y1 - sprocket.top) > 10
-    bad_right = abs(spr_avg.x2 - sprocket.right) > 10
-    bad_height = not sprocket.bounds or abs(spr_avg.height - sprocket.bounds.height) > 15
+    percent_height = diff_height = diff_top = diff_right = None
+    if sprocket.top is not None:
+      diff_top = abs(spr_avg.y1 - sprocket.top)
+    if sprocket.right is not None:
+      diff_right = abs(spr_avg.x2 - sprocket.right)
+    if sprocket.bounds:
+      diff_height = abs(spr_avg.height - sprocket.bounds.height)
+      percent_height = diff_height / spr_avg.height
+    bad_top = diff_top is None or diff_top > 10
+    bad_right = diff_right is None or diff_right > 10
+    bad_height = percent_height is None or percent_height > 0.065
     if len(prev_top) >= LIMIT \
        and ((bad_top and bad_height) or bad_right):
 
@@ -198,41 +209,78 @@ def pass2(movie, name, sprockets, spr_avg, mode, edge_res, start, nowait):
       est_bot = vector(len(prev_bot), prev_bot)
       est_rgt = vector(len(prev_rgt), prev_rgt)
 
-      print("BAD SPROCK", spr_avg.x2 - sprocket.right, spr_avg.y1 - sprocket.top,
-            spr_avg.height - sprocket.bounds.height if sprocket.bounds else None)
-      print("Bad", bad_right, bad_top, bad_height)
-      print("ESTIMATE  ", est_rgt, est_top, est_bot)
+      print("BAD SPROCK", diff_right, diff_top, diff_height, percent_height)
+      print("Bad", "right:", bad_right, "top:", bad_top, "height:", bad_height)
+      print("ESTIMATE  ", "right:", est_rgt, "top:", est_top, "bottom:", est_bot)
       print("Average", spr_avg)
-      print("This", sprocket.bounds)
+      print("This", sprocket.top, sprocket.right, sprocket.bottom, sprocket.bounds)
 
       new_right = sprocket.right
       new_top = sprocket.top
-      
+
       if bad_right:
         # FIXME - run gate on frame, check right edge distance
         qmin, qmax, remain = sprocket.discard_outliers([x[1] for x in prev_rgt])
         avg_rgt = np.average([x for x in remain if qmin < x < qmax])
         if np.isnan(avg_rgt):
           avg_rgt = spr_avg.x2
-        print("BAD RIGHT", avg_rgt)
-        right1 = abs(sprocket.right - avg_rgt)
-        right2 = abs(sprocket.right - spr_avg.x2)
-        better_right = avg_rgt
-        if right2 < right1:
-          better_right = spr_avg.x2
-        if sprocket.right is None or abs(sprocket.right - better_right) > 10:
-          new_right = better_right
+        if new_right is None:
+          new_right = est_rgt
+        possible = {'a': avg_rgt, 's': spr_avg.x2, 'e': est_rgt}
+        psort = []
+        for key in possible:
+          val = possible[key]
+          if abs(spr_avg.x2 - val) < 30:
+            psort.append([val, abs(new_right - val), abs(spr_avg.x2 - val), key])
+        if not len(psort):
+          psort.append([spr_avg.x2, 0, 's'])
+        psort.sort(key=lambda x: x[1])
+        better_right = psort[0]
+        right3 = abs(avg_rgt - spr_avg.x2)
+        print("BAD RIGHT", avg_rgt, psort, right3, "Assigned:", better_right)
+        new_right = better_right[0]
+        if better_right[1] > 50:
+          if 'e' in [x[2] for x in psort]:
+            print("USING ESTIMATED")
+            new_right = possible['e']
+          else:
+            print("USING SPR")
+            new_right = possible['s']
+
+          # if right2 < right4 or (right3 > 20 and right4 > 5):
+          #   print("SPR AVERAGE")
+          #   better_right = spr_avg.x2
+          # if sprocket.right is None or abs(sprocket.right - better_right) > 10:
+          #   print("BETTER RIGHT")
+          #   new_right = better_right
 
       if bad_top and bad_height:
-        print("BAD TOP", sprocket.bottom, est_bot)
-        if sprocket.bottom is not None \
+        print("BAD TOP",
+              "bot:", sprocket.bottom,
+              "est_top:", est_top, abs(sprocket.top - est_top) if sprocket.top else None,
+              "est_bot:", est_bot,
+              "avg y2:", spr_avg.y2)
+        if sprocket.top is not None and abs(sprocket.top - est_top) < 10:
+          print("NO CHANGE")
+          pass
+        elif sprocket.bottom is not None \
            and (abs(sprocket.bottom - est_bot) <= 10
                 or abs(sprocket.bottom - spr_avg.y2) <= 10) \
            and abs(est_bot - spr_avg.y2) < 50:
+          print("USE BOTTOM", est_top, sprocket.bottom - spr_avg.height,
+                np.mean([y2 - y1 for y1, y2 in zip(prev_top[:, 1], prev_bot[:, 1])]))
           new_top = sprocket.bottom - spr_avg.height
         else:
+          print("USE EST")
           new_top = est_top
-          
+
+        new_vcenter = new_top + spr_avg.height / 2
+        offset = abs(new_vcenter - vcenter_avg)
+        print("VERTICAL OFFSET", offset, offset / spr_avg.height)
+        if offset > 21:
+          print("USING SPR AVG")
+          new_top = spr_avg.y1
+
       # plt.clf()
       # plt.scatter([x.right for x in sprockets[idx - LIMIT:idx]],
       #             [x.top for x in sprockets[idx - LIMIT:idx]])
@@ -242,21 +290,23 @@ def pass2(movie, name, sprockets, spr_avg, mode, edge_res, start, nowait):
       # plt.show(block=False)
       # plt.pause(0.001)
       #plt.show()
-      show_frame(movie, idx+start, sprocket, new_top, new_right)
-      if abs(new_top - sprocket.top) > 3:
-        cv2.waitKey(0)
+      if sprocket.top is None or abs(new_top - sprocket.top) > 7 \
+         or abs(new_right - sprocket.right) > 7:
+        show_frame(movie, idx+start, sprocket, new_top, new_right)
+        if not nowait:
+          cv2.waitKey(0)
 
       sprocket_right = new_right
       sprocket.top = new_top
       sprocket.bottom = sprocket.top + spr_avg.height
-      
+
     # if len(prev_top) >= 2 or sprocket.right is None:
     #   qmin, qmax, remain = sprocket.discard_outliers([x[1] for x in prev_rgt])
     #   avg_rgt = np.average([x for x in remain if qmin < x < qmax])
     #   if sprocket.right is None \
     #      or abs(sprocket.right - avg_rgt) > 10:
     #     sprocket.right = avg_rgt
-      
+
     #   est_top = vector(len(prev_top), prev_top)
     #   est_bot = vector(len(prev_bot), prev_bot)
     #   est_rgt = vector(len(prev_rgt), prev_rgt)
@@ -298,12 +348,7 @@ def show_frame(movie, frame_num, sprocket, new_top=None, new_right=None):
               cv2.FONT_HERSHEY_SIMPLEX, 5, (0,0,0), 15)
   cv2.putText(frame, label, (10, frame.shape[0] - 40),
               cv2.FONT_HERSHEY_SIMPLEX, 5, (255,255,255), 7)
-  
-  if new_top is not None:
-    cv2.line(frame, (0, int(new_top)), (frame.shape[1], int(new_top)), CLR_LBLUE, 5)
-  if new_right is not None:
-    cv2.line(frame, (int(new_right), 0), (int(new_right), frame.shape[0]),
-             CLR_LBLUE, 5)
+
   if sprocket.top is not None:
     cv2.line(frame, (0, int(sprocket.top)), (frame.shape[1], int(sprocket.top)), CLR_YELLOW, 5)
   if sprocket.bottom is not None:
@@ -312,10 +357,18 @@ def show_frame(movie, frame_num, sprocket, new_top=None, new_right=None):
   if sprocket.right is not None:
     cv2.line(frame, (int(sprocket.right), 0), (int(sprocket.right), frame.shape[0]),
              CLR_YELLOW, 5)
+
+  gap = int(frame.shape[0] / 6)
+  if new_top is not None:
+    cv2.line(frame, (0, int(new_top)), (frame.shape[1] - gap, int(new_top)), CLR_LBLUE, 5)
+  if new_right is not None:
+    cv2.line(frame, (int(new_right), gap), (int(new_right), frame.shape[0] - gap),
+             CLR_LBLUE, 5)
+
   cv2.imshow("sprocket", frame)
   cv2.waitKey(1)
   return
-  
+
 def pass3(movie, name, sprockets, rel_bounds, start, nowait):
   cv2.namedWindow(name, cv2.WINDOW_NORMAL)
   cv2.namedWindow("cropped", cv2.WINDOW_NORMAL)
@@ -330,7 +383,7 @@ def pass3(movie, name, sprockets, rel_bounds, start, nowait):
     gate_bounds = Bounds((int(sprocket.bounds.x2), int(sprocket.bounds.y1 - rel_bounds.y1)),
                          (int(rel_bounds.size.width), int(rel_bounds.size.height)))
     crops.append(gate_bounds)
-  
+
     # White/black level correction
     if False and sprocket.top and sprocket.bottom:
       frame = adjust_brightness(frame, (lum_plane.shape[1] - 1, 0), (0, spr_center))
@@ -377,7 +430,7 @@ def vector(cx, points):
   b = np.polyfit(np.array(x), np.array(y), deg=2)
   e_func = np.poly1d(b)
   return e_func(cx)
-  
+
 def adjust_brightness(frame, black_loc, white_loc):
   corr_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
   planes = cv2.split(corr_frame)
@@ -398,7 +451,7 @@ def is_bright(image, dim=10, thresh=0.5):
   L, A, B = cv2.split(image)
   L = L/np.max(L)
   return np.mean(L) > thresh
-                                
+
 def get_mode(arr, col):
   if col is not None:
     a = arr[:, col]
@@ -414,41 +467,66 @@ def main():
 
   base, ext = os.path.splitext(args.file)
   name = os.path.basename(base)
-  movie = cv2.VideoCapture(args.file)
 
-  # stats_path = base + ".stats"
+  read_stats = args.stats
+  movie_path = args.file
+  if ext == ".stats":
+    # FIXME - find matching movie, don't hardcode extension
+    movie_path = base + ".MP4"
+    read_stats = True
 
-  sprockets, spr_avg, edge_res, rel_bounds \
-    = pass1(movie, name, args.start, args.limit, args.mode, args.nowait)
-  # FIXME - write stats
-  pass2(movie, name, sprockets, spr_avg, args.mode, edge_res, args.start, args.nowait)
-  #   with open(stats_path, "w") as f:
-  #     for idx, sprocket in enumerate(sprockets):
-  #       spr_bounds = np.array([sprocket.top, sprocket.bottom, sprocket.right]).tolist()
-  #       l = [args.start + idx, ] + spr_bounds
-  #       f.write(json.dumps(l) + "\n")
-  # else:
-  #   with open(stats_path, "r") as f:
-  #     stats = []
-  #     while True:
-  #       jdata = f.readline()
-  #       if not jdata:
-  #         break
-  #       jdata = json.loads(jdata)
-  #       spr = Sprocket(None)
-  #       spr.top = jdata[0]
-  #       spr.bottom = jdata[1]
-  #       spr.right = jdata[2]
-  #       gate = Gate(None, spr)
-  #       if jdata[3] is not None:
-  #         gate.bounds = Bounds(jdata[3:5], br=jdata[5:7])
-  #       stats.append([spr, gate])
+  if not os.path.exists(movie_path):
+    print("Unable to open", movie_path)
+    exit(1)
 
-  crops = pass3(movie, name, sprockets, rel_bounds, args.start, args.nowait)
-  wrpath = base + ".crops"
-  with open(wrpath, "w") as f:
-    for idx, row in enumerate(crops):
-      f.write(json.dumps([args.start + idx, ] + np.array(row.aslist).tolist()) + "\n")
+  movie = cv2.VideoCapture(movie_path)
+
+  stats_path = base + ".stats"
+  if not read_stats:
+    sprockets, spr_avg, edge_res, rel_bounds \
+      = pass1(movie, name, args.start, args.limit, args.mode, args.nowait)
+
+    # write stats: spr_avg, edge_res, rel_bounds, sprockets
+    with open(stats_path, "w") as f:
+      bounds = {
+        "sprocket_average": spr_avg.aslist,
+        "frame_size": edge_res.aslist,
+        "gate_relative": rel_bounds.aslist
+      }
+      f.write(json.dumps(bounds) + "\n")
+      for idx, sprocket in enumerate(sprockets):
+        spr_bounds = np.array([sprocket.top, sprocket.bottom, sprocket.right]).tolist()
+        l = [args.start + idx, ] + spr_bounds
+        f.write(json.dumps(l) + "\n")
+  else:
+    with open(stats_path, "r") as f:
+      jdata = f.readline()
+      bounds = json.loads(jdata)
+      spr_avg = Bounds(bounds['sprocket_average'])
+      edge_res = Size(bounds['frame_size'])
+      rel_bounds = Bounds(bounds['gate_relative'])
+
+      sprockets = []
+      while True:
+        jdata = f.readline()
+        if not jdata:
+          break
+        jdata = json.loads(jdata)
+        frame_num = jdata[0]
+        spr = Sprocket(None)
+        spr.top = jdata[1]
+        spr.bottom = jdata[2]
+        spr.right = jdata[3]
+        sprockets.append(spr)
+
+  if not args.pass1:
+    pass2(movie, name, sprockets, spr_avg, args.mode, edge_res, args.start, args.nowait)
+
+    crops = pass3(movie, name, sprockets, rel_bounds, args.start, args.nowait)
+    wrpath = base + ".crops"
+    with open(wrpath, "w") as f:
+      for idx, row in enumerate(crops):
+        f.write(json.dumps([args.start + idx, ] + np.array(row.aslist).tolist()) + "\n")
 
   return
 
