@@ -47,7 +47,7 @@ class Gate:
     est_top = est_bot = gate_height = None
     if sprocket.top and sprocket.bottom:
       v_center = int(sprocket.height / 2 + sprocket.top)
-      gate_height = sprocket.standard.frame.height * sprocket.mm_scale
+      gate_height = sprocket.estimatedFrameBounds.height
       est_top = v_center - gate_height / 2
       est_bot = est_top + gate_height
       if est_bot >= frame.shape[0]:
@@ -59,9 +59,9 @@ class Gate:
       top_rows = g_rows[t_offset:t_offset + self.MARGIN * 2]
       bot_rows = g_rows[b_offset:b_offset + self.MARGIN * 2]
 
-      # cv2.line(frame, (0, int(est_top)), (frame.shape[1], int(est_top)), CLR_LBLUE, 5)
-      # cv2.line(frame, (0, int(est_top + gate_height)),
-      #          (frame.shape[1], int(est_top + gate_height)), CLR_LBLUE, 5)
+      cv2.line(frame, (0, int(est_top)), (frame.shape[1], int(est_top)), CLR_LBLUE, 5)
+      cv2.line(frame, (0, int(est_top + gate_height)),
+               (frame.shape[1], int(est_top + gate_height)), CLR_LBLUE, 5)
 
       print("ESTIMATED",
             "sprock:", sprocket.height,
@@ -100,7 +100,7 @@ class Gate:
     y1 = est_top
     y2 = est_bot
     if x1 is not None and y1 is not None and y2 is not None:
-      x2 = int(x1 + sprocket.standard.frame.width * sprocket.mm_scale)
+      x2 = int(x1 + sprocket.estimatedFrameBounds.width)
       if x2 < frame.shape[1]:
         r_offset = x2 - 20
         rgt_cols = g_cols[r_offset:]
@@ -178,12 +178,12 @@ class Gate:
     gray = frame
     if len(gray.shape) == 3:
       gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    bottom = 0
-    top = frame.shape[0] - 1
-    right = 0
+    bottom = -(sprocket.estimatedFrameBounds.y2 - 75)
+    top = -(sprocket.estimatedFrameBounds.y1 + 75)
+    right = -(sprocket.estimatedFrameBounds.x2 - 200)
     alt_top = alt_bottom = None
     STEPS = 8
-    MARGIN = 10
+    MARGIN = 20
     for step in range(STEPS - 2):
       thresh = 255 / STEPS * (step + 1)
       print("THRESHOLD", thresh)
@@ -203,17 +203,17 @@ class Gate:
         if rect.y1 >= self.bounds.y1 - MARGIN and rect.y2 <= self.bounds.y2 + MARGIN \
            and rect.y2 > self.bounds.y1 + MARGIN * 4 and rect.x2 < frame.shape[1] - 15:
           print("GOOD RECT", frame.shape[1], rect.x2, self.bounds, rect)
-          if rect.y1 < top:
+          if rect.y1 < abs(top):
             top = rect.y1
-          if rect.y2 > bottom:
+          if rect.y2 > abs(bottom):
             bottom = rect.y2
-          r_edge = self.bounds.x1 + sprocket.mm_scale * sprocket.standard.frame.width
-          if rect.x2 > right and abs(rect.x2 - r_edge) < MARGIN * 2:
+          r_edge = self.bounds.x1 + sprocket.estimatedFrameBounds.width
+          if rect.x2 > abs(right) and abs(rect.x2 - r_edge) < MARGIN * 2:
             print("GOOD RIGHT", rect.x2, self.bounds.x2)
             right = rect.x2
           else:
             print("BAD RIGHT", right, rect.x2, r_edge, self.bounds.x2,
-                  rect.x2 > right, rect.x2 < r_edge + MARGIN)
+                  rect.x2 > abs(right), rect.x2 < r_edge + MARGIN)
           cv2.rectangle(binary_bgr, *rect.cv, CLR_RED, 5)
         elif rect.y1 >= self.bounds.y2 - MARGIN and rect.y2 == frame.shape[0]:
           if alt_bottom is None or rect.y1 < alt_bottom:
@@ -228,9 +228,9 @@ class Gate:
         else:
           print("BAD RECT", top, bottom, rect)
           print(rect.y1 >= self.bounds.y1 - MARGIN,
-                rect.y1 < top,
+                rect.y1 < abs(top),
                 rect.y2 <= self.bounds.y2 + MARGIN,
-                rect.y2 > bottom)
+                rect.y2 > abs(bottom))
           cv2.rectangle(binary_bgr, *rect.cv, CLR_BLUE, 5)
 
       #cv2.drawContours(binary, contours, -1, 127, 5)
@@ -238,6 +238,12 @@ class Gate:
       # cv2.imshow("blob", binary_bgr)
       # cv2.waitKey(0)
 
+    if top < 0:
+      top = self.bounds.y1
+    if bottom < 0:
+      bottom = self.bounds.y2
+    if right < 0:
+      right = self.bounds.x2
     print("BLOB TOP BOT", top, bottom, right, alt_bottom, alt_top,
           abs(top - self.bounds.y1), abs(bottom - self.bounds.y2),
           abs(alt_top - self.bounds.y1) if alt_top is not None else None,

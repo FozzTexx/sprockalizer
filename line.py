@@ -75,6 +75,10 @@ class Size:
     return
 
   @property
+  def area(self):
+    return self.width * self.height
+
+  @property
   def aslist(self):
     return [self.width, self.height]
   

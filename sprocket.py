@@ -117,7 +117,7 @@ class Sprocket:
     for c in contours:
       rect = Bounds(cv2.boundingRect(c))
       area = cv2.contourArea(c)
-      if rmin is not None and rect.width < rmin:
+      if area > size.area / 8 or (rmin is not None and rect.width < rmin):
         continue
       cont.extend(c.reshape(-1, 2))
     cont = np.array(cont)
@@ -218,34 +218,30 @@ class Sprocket:
       return self.height / self.standard.sprocket.height
     return None
 
-  @property
-  def gateBounds(self):
+  def estimateBounds(self, size):
     bounds = self.bounds
-    if bounds:
-      x1 = bounds.x2
-      mm_scale = bounds.height / self.standard.sprocket.height
-      v_center = int(bounds.height / 2 + bounds.y1)
-      gate_height = int(self.gateSize.height * mm_scale)
-      y1 = int(v_center - gate_height / 2)
-      y2 = y1 + gate_height
-      aspect = self.gateSize.width / self.gateSize.height
-      x2 = int(x1 + (y2 - y1) * aspect)
-      return Bounds((x1, y1), br=(x2, y2))
-    return None
+    x1 = bounds.x2
+    v_center = int(bounds.height / 2 + bounds.y1)
+    est_height = int(size.height * self.mm_scale)
+    y1 = int(v_center - est_height / 2)
+    y2 = y1 + est_height
+    aspect = size.width / size.height
+    x2 = int(x1 + (y2 - y1) * aspect)
+    return Bounds((x1, y1), br=(x2, y2))
+    
+  @property
+  def estimatedGateBounds(self):
+    bounds = self.bounds
+    if not bounds:
+      return None
+    return self.esitmateBounds(self.standard.gate)
 
   @property
-  def guess(self):
-    if not self.found:
+  def estimatedFrameBounds(self):
+    bounds = self.bounds
+    if not bounds:
       return None
-    scale = self.height / self.standard.sprocket.height
-    center = (self.top + self.bottom) / 2
-    left = self.right
-    top = int(center - gateSize.height * scale / 2)
-    right = left + int(gateSize.width * scale)
-    bottom = top + int(gateSize.height * scale)
-    if top >= 0 and bottom < self.resolution.height and right < self.resolution.width:
-      return Bounds((left, top), br=(right, bottom))
-    return None
+    return self.estimateBounds(self.standard.frame)
 
   @property
   def stats(self):

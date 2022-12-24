@@ -57,7 +57,8 @@ def pass1(movie, name, start, limit, mode, nowait):
     sprocket = Sprocket(frame, mode)
     sprockets.append(sprocket)
     if not sprocket.found:
-      singleStep = singleStep or not nowait
+      #singleStep = singleStep or not nowait
+      pass
     else:
       if search_res is None:
         search_res = Size(int(sprocket.standard.frame.width * sprocket.mm_scale),
@@ -291,12 +292,12 @@ def pass2(movie, name, sprockets, spr_avg, mode, edge_res, start, nowait):
       # plt.pause(0.001)
       #plt.show()
       if sprocket.top is None or abs(new_top - sprocket.top) > 7 \
-         or abs(new_right - sprocket.right) > 7:
+         or sprocket.right is None or abs(new_right - sprocket.right) > 7:
         show_frame(movie, idx+start, sprocket, new_top, new_right)
-        if not nowait:
-          cv2.waitKey(0)
+        # if not nowait:
+        #   cv2.waitKey(0)
 
-      sprocket_right = new_right
+      sprocket.right = new_right
       sprocket.top = new_top
       sprocket.bottom = sprocket.top + spr_avg.height
 
@@ -377,11 +378,12 @@ def pass3(movie, name, sprockets, rel_bounds, start, nowait):
   ret = movie.set(cv2.CAP_PROP_POS_FRAMES, start)
 
   crops = []
+  crop_res = Size(int(rel_bounds.size.width), int(rel_bounds.size.height))
   for idx, sprocket in enumerate(sprockets):
     ret, frame = movie.read()
 
     gate_bounds = Bounds((int(sprocket.bounds.x2), int(sprocket.bounds.y1 - rel_bounds.y1)),
-                         (int(rel_bounds.size.width), int(rel_bounds.size.height)))
+                         crop_res)
     crops.append(gate_bounds)
 
     # White/black level correction
