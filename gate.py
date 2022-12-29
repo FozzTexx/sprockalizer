@@ -234,9 +234,9 @@ class Gate:
           cv2.rectangle(binary_bgr, *rect.cv, CLR_BLUE, 5)
 
       #cv2.drawContours(binary, contours, -1, 127, 5)
-      cv2.namedWindow("blob", cv2.WINDOW_NORMAL)
-      cv2.imshow("blob", binary_bgr)
-      cv2.waitKey(0)
+      # cv2.namedWindow("blob", cv2.WINDOW_NORMAL)
+      # cv2.imshow("blob", binary_bgr)
+      # cv2.waitKey(0)
 
     if top < 0:
       top = self.bounds.y1
