@@ -99,37 +99,37 @@ class Gate:
     x1 = sprocket.right
     y1 = est_top
     y2 = est_bot
+    print("GATE GUESS", x1, y1, y2)
     if x1 is not None and y1 is not None and y2 is not None:
       x2 = int(x1 + sprocket.estimatedFrameBounds.width)
-      if x2 < frame.shape[1]:
-        r_offset = x2 - 20
-        rgt_cols = g_cols[r_offset:]
-        cmax = np.max(rgt_cols)
-        cmax2 = cmax - MARGIN
-        w = np.where(rgt_cols < cmax - MARGIN)
-        if len(w[0]):
-          cmax2 = np.max(rgt_cols[w])
-        rmax = np.max(g_cols) - 0.15
-        rpeak = np.where(rgt_cols >= rmax)[0]
-        rpeak += r_offset
-        rdiff = np.diff(rpeak)
-        x2 = self.best_row(rpeak, x2, 100)
-        self.bounds = Bounds((int(x1), int(y1)), br=(int(x2), int(y2)))
-        # print("GATE", self.bounds)
+      if x2 >= frame.shape[1]:
+        x2 = frame.shape[1] - 1
+        
+      r_offset = x2 - 20
+      rgt_cols = g_cols[r_offset:]
+      cmax = np.max(rgt_cols)
+      cmax2 = cmax - MARGIN
+      w = np.where(rgt_cols < cmax - MARGIN)
+      if len(w[0]):
+        cmax2 = np.max(rgt_cols[w])
+      rmax = np.max(g_cols) - 0.15
+      rpeak = np.where(rgt_cols >= rmax)[0]
+      rpeak += r_offset
+      rdiff = np.diff(rpeak)
+      x2 = self.best_row(rpeak, x2, 100)
+      self.bounds = Bounds((int(x1), int(y1)), br=(int(x2), int(y2)))
+      # print("GATE", self.bounds)
 
-        # cv2.line(frame, (0, int(y1)), (frame.shape[1], int(y1)), CLR_GREEN, 5)
-        # cv2.line(frame, (0, int(y2)), (frame.shape[1], int(y2)), CLR_GREEN, 5)
-        # cv2.line(frame, (x1, 0), (x1, frame.shape[0]), CLR_GREEN, 5)
-        # cv2.line(frame, (x2, 0), (x2, frame.shape[0]), CLR_GREEN, 5)
+      # cv2.line(frame, (0, int(y1)), (frame.shape[1], int(y1)), CLR_GREEN, 5)
+      # cv2.line(frame, (0, int(y2)), (frame.shape[1], int(y2)), CLR_GREEN, 5)
+      # cv2.line(frame, (x1, 0), (x1, frame.shape[0]), CLR_GREEN, 5)
+      # cv2.line(frame, (x2, 0), (x2, frame.shape[0]), CLR_GREEN, 5)
+    else:
+      print("TOO MANY PEAKS", len(tpeaks), len(bpeaks))
+      print(tpeaks)
+      print(bpeaks)
 
-    #   else:
-    #     print("OUT OF FRAME", x2)
-    # else:
-    #   print("TOO MANY PEAKS", len(tpeaks), len(bpeaks))
-    #   print(tpeaks)
-    #   print(bpeaks)
-
-    if self.bounds:
+    if True or self.bounds:
       top, bottom, right = self.blobify(original, sprocket)
       print("BLOB", top, bottom, right)
 
@@ -208,12 +208,12 @@ class Gate:
           if rect.y2 > abs(bottom):
             bottom = rect.y2
           r_edge = self.bounds.x1 + sprocket.estimatedFrameBounds.width
-          if rect.x2 > abs(right) and abs(rect.x2 - r_edge) < MARGIN * 2:
+          if rect.x2 > abs(right) and abs(rect.x2 - r_edge) < MARGIN * 4:
             print("GOOD RIGHT", rect.x2, self.bounds.x2)
             right = rect.x2
           else:
             print("BAD RIGHT", right, rect.x2, r_edge, self.bounds.x2,
-                  rect.x2 > abs(right), rect.x2 < r_edge + MARGIN)
+                  rect.x2 > abs(right), abs(rect.x2 - r_edge) < MARGIN * 4)
           cv2.rectangle(binary_bgr, *rect.cv, CLR_RED, 5)
         elif rect.y1 >= self.bounds.y2 - MARGIN and rect.y2 == frame.shape[0]:
           if alt_bottom is None or rect.y1 < alt_bottom:
@@ -234,9 +234,9 @@ class Gate:
           cv2.rectangle(binary_bgr, *rect.cv, CLR_BLUE, 5)
 
       #cv2.drawContours(binary, contours, -1, 127, 5)
-      # cv2.namedWindow("blob", cv2.WINDOW_NORMAL)
-      # cv2.imshow("blob", binary_bgr)
-      # cv2.waitKey(0)
+      cv2.namedWindow("blob", cv2.WINDOW_NORMAL)
+      cv2.imshow("blob", binary_bgr)
+      cv2.waitKey(0)
 
     if top < 0:
       top = self.bounds.y1
