@@ -34,6 +34,7 @@ def build_argparser():
   return parser
 
 def pass1(movie, name, start, limit, mode, nowait):
+  frame_count = int(movie.get(cv2.CAP_PROP_FRAME_COUNT))
   ret = movie.set(cv2.CAP_PROP_POS_FRAMES, start)
 
   cv2.namedWindow(name, cv2.WINDOW_NORMAL)
@@ -108,11 +109,11 @@ def pass1(movie, name, start, limit, mode, nowait):
             edge_count += 1
 
     annotated = frame.copy()
-    label = "%i" % (frame_num)
+    label = "%i/%i" % (frame_num, frame_count-frame_num-1)
     cv2.putText(annotated, label, (10, annotated.shape[0] - 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 5, (0,0,0), 15)
+                cv2.FONT_HERSHEY_SIMPLEX, 4, (0,0,0), 15)
     cv2.putText(annotated, label, (10, annotated.shape[0] - 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 5, (255,255,255), 7)
+                cv2.FONT_HERSHEY_SIMPLEX, 4, (255,255,255), 7)
     cv2.imshow(name, annotated)
 
     frame_num += 1
@@ -177,7 +178,6 @@ def pass1(movie, name, start, limit, mode, nowait):
   # print("MM SCALE", sprock.mm_scale, stats[0][6])
 
   cv2.namedWindow("cropped", cv2.WINDOW_NORMAL)
-  cv2.imshow("cropped", edge_search)
   rel_gate = Gate(edge_search, sprock)
   rel_bounds = Bounds((rel_gate.bounds.x1, sprock.top - rel_gate.bounds.y1),
                       rel_gate.bounds.size)
@@ -195,6 +195,8 @@ def pass1(movie, name, start, limit, mode, nowait):
   cv2.line(edge_search, (rel_gate.bounds.x2, 0), (rel_gate.bounds.x2, h), CLR_GREEN, 5)
   cv2.line(edge_search, (rel_gate.bounds.x2, h * 3), (rel_gate.bounds.x2, edge_res.height),
            CLR_GREEN, 5)
+  cv2.imshow("cropped", edge_search)
+  
   cv2.waitKey(1 if nowait else 0)
 
   cv2.destroyAllWindows()
@@ -315,7 +317,7 @@ def pass2(movie, name, sprockets, spr_avg, mode, edge_res, start, nowait):
       if sprocket.top is None or abs(new_top - sprocket.top) > 7 \
          or sprocket.right is None or abs(new_right - sprocket.right) > 7:
         new_top, new_right = show_frame(movie, idx+start, sprocket, new_top, new_right,
-                                        adjust=not nowait)
+                                        spr_avg.height, adjust=not nowait)
         # if not nowait:
         #   cv2.waitKey(0)
 
@@ -374,7 +376,8 @@ def pass2(movie, name, sprockets, spr_avg, mode, edge_res, start, nowait):
   cv2.destroyAllWindows()
   return
 
-def show_frame(movie, frame_num, sprocket, orig_top=None, orig_right=None, adjust=False):
+def show_frame(movie, frame_num, sprocket, orig_top=None, orig_right=None, height=None,
+               adjust=False):
   ret = movie.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
   ret, frame = movie.read()
 
@@ -402,6 +405,9 @@ def show_frame(movie, frame_num, sprocket, orig_top=None, orig_right=None, adjus
     if new_top is not None:
       cv2.line(annotated, (0, int(new_top)), (annotated.shape[1] - gap, int(new_top)),
                CLR_LBLUE, 5)
+      if height is not None:
+        cv2.line(annotated, (0, int(new_top + height)),
+                 (annotated.shape[1] - gap, int(new_top + height)), CLR_LBLUE, 5)
     if new_right is not None:
       cv2.line(annotated, (int(new_right), gap), (int(new_right), annotated.shape[0] - gap),
                CLR_LBLUE, 5)

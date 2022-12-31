@@ -208,12 +208,13 @@ class Gate:
           if rect.y2 > abs(bottom):
             bottom = rect.y2
           r_edge = self.bounds.x1 + sprocket.estimatedFrameBounds.width
-          if rect.x2 > abs(right) and abs(rect.x2 - r_edge) < MARGIN * 4:
+          if rect.x2 > abs(right) and abs(rect.x2 - r_edge) < MARGIN * 6:
             print("GOOD RIGHT", rect.x2, self.bounds.x2)
             right = rect.x2
           else:
             print("BAD RIGHT", right, rect.x2, r_edge, self.bounds.x2,
-                  rect.x2 > abs(right), abs(rect.x2 - r_edge) < MARGIN * 4)
+                  rect.x2 > abs(right), abs(rect.x2 - r_edge) < MARGIN * 6,
+                  abs(rect.x2 - r_edge), MARGIN * 6)
           cv2.rectangle(binary_bgr, *rect.cv, CLR_RED, 5)
         elif rect.y1 >= self.bounds.y2 - MARGIN and rect.y2 == frame.shape[0]:
           if alt_bottom is None or rect.y1 < alt_bottom:
