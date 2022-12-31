@@ -314,7 +314,8 @@ def pass2(movie, name, sprockets, spr_avg, mode, edge_res, start, nowait):
       #plt.show()
       if sprocket.top is None or abs(new_top - sprocket.top) > 7 \
          or sprocket.right is None or abs(new_right - sprocket.right) > 7:
-        show_frame(movie, idx+start, sprocket, new_top, new_right)
+        new_top, new_right = show_frame(movie, idx+start, sprocket, new_top, new_right,
+                                        adjust=not nowait)
         # if not nowait:
         #   cv2.waitKey(0)
 
@@ -373,35 +374,66 @@ def pass2(movie, name, sprockets, spr_avg, mode, edge_res, start, nowait):
   cv2.destroyAllWindows()
   return
 
-def show_frame(movie, frame_num, sprocket, new_top=None, new_right=None):
+def show_frame(movie, frame_num, sprocket, orig_top=None, orig_right=None, adjust=False):
   ret = movie.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
   ret, frame = movie.read()
 
-  label = "%i" % (frame_num)
-  cv2.putText(frame, label, (10, frame.shape[0] - 40),
-              cv2.FONT_HERSHEY_SIMPLEX, 5, (0,0,0), 15)
-  cv2.putText(frame, label, (10, frame.shape[0] - 40),
-              cv2.FONT_HERSHEY_SIMPLEX, 5, (255,255,255), 7)
+  new_top = orig_top
+  new_right = orig_right
+  while True:
+    annotated = frame.copy()
+    label = "%i" % (frame_num)
+    cv2.putText(annotated, label, (10, annotated.shape[0] - 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 5, (0,0,0), 15)
+    cv2.putText(annotated, label, (10, annotated.shape[0] - 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 5, (255,255,255), 7)
 
-  if sprocket.top is not None:
-    cv2.line(frame, (0, int(sprocket.top)), (frame.shape[1], int(sprocket.top)), CLR_YELLOW, 5)
-  if sprocket.bottom is not None:
-    cv2.line(frame, (0, int(sprocket.bottom)), (frame.shape[1], int(sprocket.bottom)),
-             CLR_YELLOW, 5)
-  if sprocket.right is not None:
-    cv2.line(frame, (int(sprocket.right), 0), (int(sprocket.right), frame.shape[0]),
-             CLR_YELLOW, 5)
+    if sprocket.top is not None:
+      cv2.line(annotated, (0, int(sprocket.top)), (annotated.shape[1], int(sprocket.top)),
+               CLR_YELLOW, 5)
+    if sprocket.bottom is not None:
+      cv2.line(annotated, (0, int(sprocket.bottom)),
+               (annotated.shape[1], int(sprocket.bottom)), CLR_YELLOW, 5)
+    if sprocket.right is not None:
+      cv2.line(annotated, (int(sprocket.right), 0), (int(sprocket.right), annotated.shape[0]),
+               CLR_YELLOW, 5)
 
-  gap = int(frame.shape[0] / 6)
-  if new_top is not None:
-    cv2.line(frame, (0, int(new_top)), (frame.shape[1] - gap, int(new_top)), CLR_LBLUE, 5)
-  if new_right is not None:
-    cv2.line(frame, (int(new_right), gap), (int(new_right), frame.shape[0] - gap),
-             CLR_LBLUE, 5)
+    gap = int(annotated.shape[0] / 6)
+    if new_top is not None:
+      cv2.line(annotated, (0, int(new_top)), (annotated.shape[1] - gap, int(new_top)),
+               CLR_LBLUE, 5)
+    if new_right is not None:
+      cv2.line(annotated, (int(new_right), gap), (int(new_right), annotated.shape[0] - gap),
+               CLR_LBLUE, 5)
 
-  cv2.imshow("sprocket", frame)
-  cv2.waitKey(1)
-  return
+    cv2.imshow("sprocket", annotated)
+    key = cv2.waitKey(1 if not adjust else 0)
+    if not adjust:
+      break
+    if key == ord('i') or key == 82:
+      # move up
+      new_top = max(new_top - 1, 0)
+    elif key == ord('j') or key == 81:
+      # move left
+      new_right = max(new_right - 1, 0)
+    elif key == ord('k') or key == 83:
+      # move right
+      new_right = min(new_right + 1, annotated.shape[1] - 1)
+    elif key == ord('m') or key == 84:
+      # move down
+      new_top = min(new_top + 1, annotated.shape[0] - 1)
+    elif key == ord('r'):
+      # reset to original values
+      new_top = orig_top
+      new_right = orig_right
+    elif key == ord('s'):
+      # use sprocket values
+      new_top = sprocket.top if sprocket.top is not None else orig_top
+      new_right = sprocket.right if sprocket.right is not None else orig_right
+    elif key == 27 or key == 13 or key == ord(' '):
+      break
+    
+  return new_top, new_right
 
 def pass3(movie, name, sprockets, rel_bounds, start, nowait):
   cv2.namedWindow(name, cv2.WINDOW_NORMAL)
