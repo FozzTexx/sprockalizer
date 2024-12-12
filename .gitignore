@@ -1,0 +1,7 @@
+*~
+*.mp4
+*.MP4
+*.crops
+*.stats
+__pycache__
+*.bundle
